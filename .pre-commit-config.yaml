@@ -17,6 +17,18 @@ repos:
       - id: ruff-check
         args: [--fix]
 
+  # Markdown formatting. --number keeps ordered lists numbered 1, 2, 3 in the source
+  # instead of collapsing them all to "1." - Claude Code sessions read the raw text.
+  # 마크다운 서식. --number는 순서 목록을 원문에서 1, 2, 3으로 유지합니다. 없으면 전부 "1."로
+  # 바뀌는데, Claude Code 세션은 렌더링이 아니라 원문을 읽습니다.
+  - repo: https://github.com/executablebooks/mdformat
+    rev: 1.0.0
+    hooks:
+      - id: mdformat
+        args: [--number]
+        additional_dependencies:
+          - mdformat-gfm==1.0.0
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

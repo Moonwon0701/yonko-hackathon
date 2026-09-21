@@ -83,14 +83,54 @@ its right.
 adapter  ->  world  ->  pathfind / bt + strategy  ->  arena
 ```
 
-| File / 파일 | Responsibility / 책임 | Must NOT contain / 들어가면 안 되는 것 |
-|---|---|---|
-| `agent/adapter.py` | The **only** module that knows the raw game API: endpoints, auth, wire/JSON format, serialization. Converts raw payloads into a `World` and converts our actions back into the API's format.<br><br>원시 게임 API를 아는 **유일한** 모듈. 엔드포인트, 인증, 통신·JSON 형식, 직렬화를 담당. 원시 페이로드를 `World`로 바꾸고, 우리 행동을 다시 API 형식으로 되돌림. | Any strategy, heuristics, or decision-making<br><br>전략, 휴리스틱, 의사결정 일체 |
-| `agent/world.py` | A clean, engine-agnostic game-state object. Plain dataclasses, our own vocabulary, no JSON keys, no network types.<br><br>엔진에 종속되지 않는 깔끔한 게임 상태 객체. 평범한 dataclass, 우리만의 용어, JSON 키나 네트워크 타입 없음. | Any I/O or knowledge of the API's field names<br><br>모든 I/O, API 필드명에 대한 지식 |
-| `agent/pathfind.py` | Pure pathfinding functions: `(world/grid, start, goal) -> path`. Deterministic, no I/O, no globals, no mutation of inputs.<br><br>순수한 경로 탐색 함수. 결정적이며 I/O·전역 변수·입력 변형이 없음. | Strategy decisions, randomness without a seed<br><br>전략적 판단, 시드 없는 난수 |
-| `agent/bt.py` | Hand-written behavior tree primitives (node types, composites, tick semantics). Generic - knows nothing about our specific game.<br><br>직접 작성한 행동 트리 기본 요소(노드 종류, 조합 노드, 틱 동작). 범용이며 우리 게임을 전혀 모름. | Game-specific conditions or actions<br><br>게임에 특화된 조건이나 행동 |
-| `agent/strategy.py` | `decide(world) -> actions`. Our actual behavior tree, composed from `bt.py` nodes and `pathfind.py` functions.<br><br>`decide(world) -> actions`. `bt.py`의 노드와 `pathfind.py`의 함수로 조립한 실제 행동 트리. | Raw API formats, network calls<br><br>원시 API 형식, 네트워크 호출 |
-| `arena.py` | Runs version-vs-version matches and reports win rate. Our only measure of "is this change better?"<br><br>버전 대 버전 대전을 돌려 승률을 보고. "이 변경이 정말 나은가?"를 판단하는 유일한 척도. | Agent logic<br><br>에이전트 로직 |
+- **`agent/adapter.py`** — The **only** module that knows the raw game API: endpoints,
+  auth, wire/JSON format, serialization. Converts raw payloads into a `World` and converts
+  our actions back into the API's format.
+
+  원시 게임 API를 아는 **유일한** 모듈. 엔드포인트, 인증, 통신·JSON 형식, 직렬화를 담당. 원시
+  페이로드를 `World`로 바꾸고, 우리 행동을 다시 API 형식으로 되돌림.
+
+  **Never / 금지:** any strategy, heuristics, or decision-making / 전략, 휴리스틱, 의사결정
+  일체.
+
+- **`agent/world.py`** — A clean, engine-agnostic game-state object. Plain dataclasses, our
+  own vocabulary, no JSON keys, no network types.
+
+  엔진에 종속되지 않는 깔끔한 게임 상태 객체. 평범한 dataclass, 우리만의 용어, JSON 키나
+  네트워크 타입 없음.
+
+  **Never / 금지:** any I/O, or knowledge of the API's field names / 모든 I/O, API 필드명에
+  대한 지식.
+
+- **`agent/pathfind.py`** — Pure pathfinding functions: `(world/grid, start, goal) -> path`.
+  Deterministic, no I/O, no globals, no mutation of inputs.
+
+  순수한 경로 탐색 함수. 결정적이며 I/O·전역 변수·입력 변형이 없음.
+
+  **Never / 금지:** strategy decisions, randomness without a seed / 전략적 판단, 시드 없는
+  난수.
+
+- **`agent/bt.py`** — Hand-written behavior tree primitives (node types, composites, tick
+  semantics). Generic - knows nothing about our specific game.
+
+  직접 작성한 행동 트리 기본 요소(노드 종류, 조합 노드, 틱 동작). 범용이며 우리 게임을 전혀
+  모름.
+
+  **Never / 금지:** game-specific conditions or actions / 게임에 특화된 조건이나 행동.
+
+- **`agent/strategy.py`** — `decide(world) -> actions`. Our actual behavior tree, composed
+  from `bt.py` nodes and `pathfind.py` functions.
+
+  `bt.py`의 노드와 `pathfind.py`의 함수로 조립한 실제 행동 트리.
+
+  **Never / 금지:** raw API formats, network calls / 원시 API 형식, 네트워크 호출.
+
+- **`arena.py`** — Runs version-vs-version matches and reports win rate. Our only measure
+  of "is this change better?"
+
+  버전 대 버전 대전을 돌려 승률을 보고. "이 변경이 정말 나은가?"를 판단하는 유일한 척도.
+
+  **Never / 금지:** agent logic / 에이전트 로직.
 
 ### `decide(world) -> actions`
 
@@ -248,6 +288,79 @@ Three people, three Claude Code sessions, one repo.
 - Line length 100. Tests live in `tests/`, named `test_<module>.py`.
 
   줄 길이는 100자. 테스트는 `tests/`에 `test_<module>.py` 이름으로 둡니다.
+
+## Documentation style / 문서 작성 규칙
+
+Docs are read by teammates *and* by Claude Code sessions, which see the raw text rather
+than the rendered page. Keep the source readable, not just the preview.
+
+문서는 팀원뿐 아니라 Claude Code 세션도 읽습니다. 세션은 렌더링된 화면이 아니라 원문을 보므로,
+미리보기가 아니라 **원문**이 읽기 좋아야 합니다.
+
+- **Every doc is bilingual.** English paragraph first, Korean directly below it, same
+  meaning. If you change one, change the other in the same commit. This applies to all
+  Markdown files, module docstrings, and config comments - not just this file.
+
+  **모든 문서는 이중 언어로 씁니다.** 영문 문단이 먼저, 바로 아래에 같은 뜻의 국문. 한쪽을
+  고치면 같은 커밋에서 다른 쪽도 고칩니다. 이 파일뿐 아니라 모든 마크다운 파일, 모듈 독스트링,
+  설정 파일 주석에 적용됩니다.
+
+- **`mdformat` is authoritative for Markdown**, the way ruff is for Python. Never hand-align
+  Markdown; pre-commit runs it for you. It is pinned in `pyproject.toml`, in
+  `.pre-commit-config.yaml`, and in CI - bump all three together.
+
+  **마크다운의 기준은 `mdformat`입니다.** 파이썬에서 ruff가 하는 역할과 같습니다. 손으로 정렬
+  하지 마세요. pre-commit이 대신 실행합니다. 버전은 `pyproject.toml`,
+  `.pre-commit-config.yaml`, CI 세 곳에 고정되어 있으니 올릴 때는 함께 올립니다.
+
+- **Keep table cells short.** Tables are padded to the widest cell, so one long cell makes
+  every row long, and editing any cell re-pads the whole table - a guaranteed merge
+  conflict in a file all three of us edit. Long prose goes in a list below the table, not
+  inside it.
+
+  **표 안에는 짧은 값만 넣습니다.** 표는 가장 넓은 셀에 맞춰 정렬되므로 긴 셀 하나가 모든 행을
+  길게 만들고, 셀 하나만 고쳐도 표 전체가 재정렬되어 셋이 함께 고치는 파일에서 충돌이
+  확실해집니다. 긴 설명은 표 안이 아니라 표 아래 목록으로 씁니다.
+
+- **Nested lists under a `- [ ]` item indent by 2 spaces**, with a blank line before them.
+  Four or more spaces becomes a code block.
+
+  **`- [ ]` 항목 아래의 중첩 목록은 2칸 들여쓰기**하고 앞에 빈 줄을 둡니다. 4칸 이상은 코드
+  블록으로 해석됩니다.
+
+- **Headings are ATX (`##`) in the form `English / 한국어`.** Code fences always declare a
+  language (```` ```bash ````, ```` ```python ````).
+
+  **헤딩은 `##` 형식이며 `English / 한국어`로 씁니다.** 코드 펜스에는 항상 언어를 적습니다
+  (```` ```bash ````, ```` ```python ````).
+
+- **Team process docs live in `docs/` with kebab-case names** (`day1-checklist.md`). Only
+  `README.md`, `CLAUDE.md` and `experiments.md` sit at the repo root.
+
+  **팀 프로세스 문서는 `docs/`에 kebab-case 이름으로** 둡니다(`day1-checklist.md`). 저장소
+  최상위에는 `README.md`, `CLAUDE.md`, `experiments.md`만 둡니다.
+
+- **Docstrings follow Google style** - a one-line summary, then `Args:` / `Returns:` /
+  `Raises:` when the function takes or returns anything non-obvious. This is a convention,
+  not a CI gate: no linter enforces it, so it is on us.
+
+  **독스트링은 Google 스타일**을 따릅니다. 한 줄 요약 뒤에, 인자나 반환값이 자명하지 않으면
+  `Args:` / `Returns:` / `Raises:`를 적습니다. CI가 막지 않는 규약이므로 사람이 지켜야 합니다.
+
+  ```python
+  def nearest_flag(world: World, from_pos: Position) -> Position | None:
+      """Return the closest uncaptured flag, or None if there are none.
+
+      가장 가까운 미점령 깃발을 반환하고, 없으면 None을 반환합니다.
+
+      Args:
+          world: Current game state. / 현재 게임 상태.
+          from_pos: Position to measure from. / 거리를 재는 기준 위치.
+
+      Returns:
+          The nearest flag's position, or None. / 가장 가까운 깃발의 위치, 없으면 None.
+      """
+  ```
 
 ## Running things / 실행 명령
 

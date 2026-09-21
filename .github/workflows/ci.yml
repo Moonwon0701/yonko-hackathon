@@ -28,10 +28,13 @@ jobs:
       # pyproject.toml의 [dev] 추가 의존성과 같은 버전으로 고정합니다. 그래야 CI와 모든
       # 노트북이 "서식이 맞다"는 말의 뜻에 합의할 수 있습니다.
       - name: Install tools
-        run: pip install "ruff==0.16.8" "pytest==9.1.1"
+        run: pip install "ruff==0.16.8" "pytest==9.1.1" "mdformat==1.0.0" "mdformat-gfm==1.0.0"
 
       - name: Format check
         run: ruff format --check .
+
+      - name: Markdown format check
+        run: mdformat --check --number .
 
       - name: Lint
         run: ruff check .

@@ -55,7 +55,9 @@ pre-commit run --all-files   # everything the hooks would do
 
 ## Workflow
 
-`main` is protected and must always be submittable. Nothing is committed to it directly.
+`main` must always be submittable. Nothing is committed to it directly - every change goes
+through a PR. This is a team convention right now, not an enforced branch protection rule,
+so it holds only as long as all three of us keep to it.
 
 ```bash
 git switch main && git pull

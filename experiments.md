@@ -15,8 +15,8 @@ number of games (a 3-game result is noise).
 그냥 잡음입니다).
 
 | Date / 날짜 | Change / 변경 내용 | Arena result / 아레나 결과 | Kept? / 채택 여부 |
-|---|---|---|---|
-| | | | |
+| ----------- | ------------------ | -------------------------- | ----------------- |
+|             |                    |                            |                   |
 
 <!-- Example of the expected format - delete once there are real rows:
      형식 예시입니다. 실제 기록이 쌓이면 지우세요:

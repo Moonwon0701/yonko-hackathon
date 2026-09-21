@@ -96,14 +96,14 @@ CI는 모든 PR에서 `ruff format --check`, `ruff check`, `pytest`를 실행하
 
 ## Layout / 구조
 
-| Path / 경로 | Contents / 내용 |
-|---|---|
-| `agent/adapter.py` | The only module that knows the raw game API<br>원시 게임 API를 아는 유일한 모듈 |
-| `agent/world.py` | Clean, engine-agnostic game state<br>엔진에 종속되지 않는 깔끔한 게임 상태 |
-| `agent/pathfind.py` | Pure pathfinding functions<br>순수한 경로 탐색 함수 |
-| `agent/bt.py` | Hand-written behavior tree primitives<br>직접 작성한 행동 트리 기본 요소 |
-| `agent/strategy.py` | `decide(world) -> actions` |
-| `arena.py` | Version-vs-version win rate<br>버전 대 버전 승률 측정 |
-| `tests/` | Scenario tests<br>시나리오 테스트 |
-| `docs/day1-checklist.md` | What we do the moment the rules drop<br>규칙이 공개되는 순간 해야 할 일 |
-| `experiments.md` | Log of every strategy change and its arena result<br>모든 전략 변경과 아레나 결과 기록 |
+| Path / 경로              | Contents / 내용                                                                        |
+| ------------------------ | -------------------------------------------------------------------------------------- |
+| `agent/adapter.py`       | The only module that knows the raw game API<br>원시 게임 API를 아는 유일한 모듈        |
+| `agent/world.py`         | Clean, engine-agnostic game state<br>엔진에 종속되지 않는 깔끔한 게임 상태             |
+| `agent/pathfind.py`      | Pure pathfinding functions<br>순수한 경로 탐색 함수                                    |
+| `agent/bt.py`            | Hand-written behavior tree primitives<br>직접 작성한 행동 트리 기본 요소               |
+| `agent/strategy.py`      | `decide(world) -> actions`                                                             |
+| `arena.py`               | Version-vs-version win rate<br>버전 대 버전 승률 측정                                  |
+| `tests/`                 | Scenario tests<br>시나리오 테스트                                                      |
+| `docs/day1-checklist.md` | What we do the moment the rules drop<br>규칙이 공개되는 순간 해야 할 일                |
+| `experiments.md`         | Log of every strategy change and its arena result<br>모든 전략 변경과 아레나 결과 기록 |

@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yonko-agent"
+version = "0.1.0"
+description = "Team agent for a capture-the-flag style hackathon game"
+requires-python = ">=3.12"
+
+# Runtime dependencies. The game SDK / HTTP client is unknown until day 1 - add it here
+# (pinned) as soon as we know what the API needs, so all three machines match.
+dependencies = []
+
+[project.optional-dependencies]
+# Pinned exactly: every session must format and lint identically.
+dev = [
+    "ruff==0.16.8",
+    "pytest==9.1.1",
+    "pre-commit==4.6.2",
+]
+
+[tool.setuptools]
+packages = ["agent"]
+py-modules = ["arena"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# Keep this list explicit so all three Claude Code sessions lint against the same rules.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # import sorting
+    "UP",  # pyupgrade - modern syntax for our pinned Python
+    "B",   # bugbear - likely bugs
+    "SIM", # simplify
+]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

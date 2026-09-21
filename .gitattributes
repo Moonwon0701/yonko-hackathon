@@ -1,0 +1,5 @@
+# Normalise line endings so three machines (Windows/macOS/Linux) never produce
+# whitespace-only diffs.
+* text=auto eol=lf
+*.png binary
+*.jpg binary

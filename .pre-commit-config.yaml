@@ -1,0 +1,22 @@
+# Run `pre-commit install` once after cloning. These hooks are what keep three
+# Claude Code sessions producing byte-identical formatting.
+#
+# The ruff rev is pinned and must match the `ruff==` pin in pyproject.toml and the
+# version installed in CI. Bump all three together, never one alone.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files

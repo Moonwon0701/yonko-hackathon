@@ -1,0 +1,34 @@
+# Code ownership - who reviews what.
+#
+# SETUP: replace the three placeholders below with the real GitHub handles, e.g.
+#   @IO-PLACEHOLDER  ->  @someuser
+# Until that is done these entries match nobody and no reviewers are auto-requested.
+#
+#   IO        - the game API, the state object, the evaluation harness, CI
+#   ALGO      - pathfinding
+#   STRATEGY  - the behavior tree and the agent's actual behavior
+#
+# "Owner" means: that person's session is the one that edits the file. If you need a
+# change in someone else's file, coordinate first (see CLAUDE.md > Collaboration).
+
+# Fallback - anything not claimed below.
+*                       @IO-PLACEHOLDER
+
+# IO
+/agent/adapter.py       @IO-PLACEHOLDER
+/agent/world.py         @IO-PLACEHOLDER
+/arena.py               @IO-PLACEHOLDER
+/.github/               @IO-PLACEHOLDER
+/pyproject.toml         @IO-PLACEHOLDER
+/.pre-commit-config.yaml @IO-PLACEHOLDER
+
+# ALGO
+/agent/pathfind.py      @ALGO-PLACEHOLDER
+
+# STRATEGY
+/agent/bt.py            @STRATEGY-PLACEHOLDER
+/agent/strategy.py      @STRATEGY-PLACEHOLDER
+
+# Shared - the team brief and the experiment log change by agreement, so everyone reviews.
+/CLAUDE.md              @IO-PLACEHOLDER @ALGO-PLACEHOLDER @STRATEGY-PLACEHOLDER
+/experiments.md         @IO-PLACEHOLDER @ALGO-PLACEHOLDER @STRATEGY-PLACEHOLDER

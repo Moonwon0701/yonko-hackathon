@@ -88,11 +88,19 @@ git push -u origin <owner>/<topic>
 gh pr create                      # fills in the PR template / PR 템플릿이 채워집니다
 ```
 
-CI runs `ruff format --check`, `ruff check` and `pytest` on every PR; all three must pass
-before merging. Reviewers are auto-requested from `.github/CODEOWNERS`.
+CI runs `ruff format --check`, `ruff check`, `mdformat --check` and `pytest` on every PR;
+all of them must pass before merging. Reviewers are auto-requested from
+`.github/CODEOWNERS`.
 
-CI는 모든 PR에서 `ruff format --check`, `ruff check`, `pytest`를 실행하며, 셋 다 통과해야
-머지할 수 있습니다. 리뷰어는 `.github/CODEOWNERS`에 따라 자동 지정됩니다.
+CI는 모든 PR에서 `ruff format --check`, `ruff check`, `mdformat --check`, `pytest`를
+실행하며, 전부 통과해야 머지할 수 있습니다. 리뷰어는 `.github/CODEOWNERS`에 따라 자동
+지정됩니다.
+
+**New to this loop?** [`docs/workflow.md`](docs/workflow.md) walks through one change from
+branch to merge, and what to do when CI goes red or a merge conflicts.
+
+**이 방식이 처음이라면** [`docs/workflow.md`](docs/workflow.md)에 브랜치부터 머지까지 한
+바퀴가 단계별로 적혀 있고, CI가 빨간불이거나 충돌이 났을 때의 대처법도 있습니다.
 
 ## Layout / 구조
 
@@ -105,5 +113,6 @@ CI는 모든 PR에서 `ruff format --check`, `ruff check`, `pytest`를 실행하
 | `agent/strategy.py`      | `decide(world) -> actions`                                                             |
 | `arena.py`               | Version-vs-version win rate<br>버전 대 버전 승률 측정                                  |
 | `tests/`                 | Scenario tests<br>시나리오 테스트                                                      |
+| `docs/workflow.md`       | How a change goes from idea to `main`<br>변경 하나가 `main`까지 가는 과정              |
 | `docs/day1-checklist.md` | What we do the moment the rules drop<br>규칙이 공개되는 순간 해야 할 일                |
 | `experiments.md`         | Log of every strategy change and its arena result<br>모든 전략 변경과 아레나 결과 기록 |

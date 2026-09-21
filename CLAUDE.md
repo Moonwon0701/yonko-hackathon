@@ -206,7 +206,8 @@ Three people, three Claude Code sessions, one repo.
   **브랜치 하나에 기능 하나**, 이름은 `<owner>/<topic>` 형식(예: `io/adapter-auth`,
   `algo/astar`, `strategy/flag-capture`). 항상 최신 `main`에서 분기하세요.
 
-- **Every change reaches `main` through a PR** that passes CI.
+- **Every change reaches `main` through a PR** that passes CI. The full loop, step by step,
+  is in [`docs/workflow.md`](docs/workflow.md).
 
   **모든 변경은 CI를 통과한 PR을 거쳐** `main`에 들어갑니다.
 
@@ -370,6 +371,8 @@ ruff check --fix .   # lint / 린트
 pytest -q            # tests / 테스트
 ```
 
-See `README.md` for first-time setup and `docs/day1-checklist.md` for the day 1 plan.
+See `README.md` for first-time setup, [`docs/workflow.md`](docs/workflow.md) for how a
+change gets to `main`, and `docs/day1-checklist.md` for the day 1 plan.
 
-최초 환경 설정은 `README.md`, 1일차 계획은 `docs/day1-checklist.md`를 보세요.
+최초 환경 설정은 `README.md`, 변경 하나가 `main`까지 가는 과정은
+[`docs/workflow.md`](docs/workflow.md), 1일차 계획은 `docs/day1-checklist.md`를 보세요.

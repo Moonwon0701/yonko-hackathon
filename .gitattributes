@@ -1,5 +1,7 @@
 # Normalise line endings so three machines (Windows/macOS/Linux) never produce
 # whitespace-only diffs.
+# 줄바꿈 문자를 통일해, 세 대의 컴퓨터(Windows/macOS/Linux)가 공백만 다른 diff를 만들지 않도록
+# 합니다.
 * text=auto eol=lf
 *.png binary
 *.jpg binary

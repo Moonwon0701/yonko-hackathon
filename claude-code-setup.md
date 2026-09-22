@@ -6,6 +6,9 @@
 
 해커톤 시작 전에 셋 다 4번까지는 끝내 두세요. 5번부터는 필요할 때 찾아보면 됩니다.
 
+> **먼저 확인:** Claude Code는 **무료 계정으로는 쓸 수 없습니다.** 유료 구독(Pro 이상) 또는
+> API 크레딧이 필요합니다. 자세한 건 [1-0. 계정 요금제](#1-0-계정-요금제--무료-계정으로는-안-됩니다).
+
 1. 설치하고 로그인하기
 2. CLI와 GUI의 차이 — 뭘 언제 쓰나
 3. CLI 기본 조작
@@ -34,6 +37,42 @@
 
 ## 1. 설치하고 로그인하기
 
+### 1-0. 계정 요금제 — 무료 계정으로는 안 됩니다
+
+공식 문서 그대로: *"Claude Code requires a Pro, Max, Team, Enterprise, or Console account.
+The free claude.ai plan does not include Claude Code access."*
+
+즉 **구독** 아니면 **API 크레딧 선불**, 둘 중 하나는 있어야 합니다.
+
+| 방법 | 비용 | 설명 |
+| --- | --- | --- |
+| 무료 claude.ai 계정 | 0원 | **사용 불가.** 웹 채팅만 → 예전처럼 복붙 |
+| **Pro** | 월 $20 | 가장 싼 정식 경로. 웹·앱·CLI가 한 구독으로 묶임 |
+| Max | 월 $100~200 | 사용량 한도가 훨씬 큼 |
+| **Console (API)** | 쓴 만큼 | 월정액 없이 크레딧 충전 → 토큰 단위 과금 |
+| Bedrock / Vertex / Foundry | 클라우드 청구 | 회사·학교 클라우드 계정을 쓸 때 |
+
+Pro·Max는 **웹에서 쓴 양과 CLI에서 쓴 양이 같은 한도를 공유**합니다. 한도를 다 쓰면 기다리거나
+API 크레딧으로 넘어갈지 물어보는데, **넘어갈 때는 반드시 본인 동의를 받습니다.** 모르는 사이에
+과금되지 않습니다.
+
+#### 구독 없이 API 크레딧으로 쓰는 법
+
+<https://console.anthropic.com> 에서 가입 → 크레딧 충전(처음엔 $5~10이면 충분) → API 키 발급.
+그다음 터미널에서:
+
+```powershell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."     # mac/Linux: export ANTHROPIC_API_KEY="sk-ant-..."
+claude
+```
+
+`ANTHROPIC_API_KEY`가 설정돼 있으면 브라우저 로그인 대신 그 키를 쓸지 한 번 물어봅니다.
+사용량은 `/cost`로 확인합니다.
+
+> **어느 쪽을 고를까:** 해커톤 3~4일 동안 하루 몇 시간씩 붙잡고 있을 거라면 토큰 값이 금방
+> 쌓이므로 **Pro $20 쪽이 대체로 쌉니다.** "일단 맛만 보겠다"면 Console 크레딧이 부담이
+> 적습니다. **API 키는 절대 저장소에 커밋하지 마세요.**
+
 ### 설치 (Windows)
 
 **PowerShell**을 열고 (시작 메뉴에서 `powershell` 검색) 아래 한 줄을 붙여넣습니다.
@@ -44,9 +83,16 @@ irm https://claude.ai/install.ps1 | iex
 
 설치가 끝나면 **터미널 창을 닫았다가 새로 엽니다.** (PATH가 새 창부터 적용됩니다.)
 
-> **Windows는 Git for Windows가 반드시 필요합니다.** Claude Code가 명령을 실행할 때 Git Bash를
-> 씁니다. `git --version`이 동작하지 않으면 <https://git-scm.com/download/win> 에서 먼저
-> 설치하세요.
+winget을 쓰는 쪽이 편하면 이것도 됩니다 (대신 자동 업데이트가 안 되니 가끔
+`winget upgrade Anthropic.ClaudeCode`를 해줘야 합니다).
+
+```powershell
+winget install Anthropic.ClaudeCode
+```
+
+> **Git for Windows는 필수가 아니라 권장입니다.** 설치돼 있으면 Claude Code가 Git Bash로 명령을
+> 실행하고, 없으면 PowerShell로 실행합니다. 어차피 우리는 git을 쓰니까 깔아 두세요 —
+> <https://git-scm.com/download/win>. (`git --version`으로 확인)
 
 ### 설치 (macOS / Linux)
 
@@ -74,6 +120,8 @@ claude
 Claude Code 안에서 `/login`, 확인은 `/status`입니다.
 
 > 로그인은 **컴퓨터 단위로 한 번**입니다. 저장소마다 다시 하지 않습니다.
+>
+> 무료 계정으로 로그인하면 여기서 막힙니다. [1-0. 계정 요금제](#1-0-계정-요금제--무료-계정으로는-안-됩니다)를 보세요.
 
 ---
 
@@ -317,6 +365,8 @@ claude
 | 뭔가 이상하게 동작 | `claude doctor` → `/status` |
 | 대답이 헛돌거나 옛날 이야기를 함 | `/clear` 후 다시 |
 | 승인 창이 너무 자주 뜸 | `/permissions`로 자주 쓰는 명령 허용 |
+| 로그인은 되는데 사용이 막힘 | 무료 계정입니다. Pro 구독 또는 API 크레딧 필요 (1-0절) |
+| 사용 한도를 다 씀 | `/cost`로 확인. 기다리거나 API 크레딧으로 전환 (동의를 물어봅니다) |
 | 한글 입력이 깨짐 | Windows Terminal 사용 (기본 cmd 창 말고) |
 | 줄바꿈하려는데 전송됨 | `\` 입력 후 Enter |
 | Claude가 파일을 못 찾음 | `@`로 경로를 직접 지정 |

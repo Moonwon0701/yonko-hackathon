@@ -4,11 +4,14 @@
 
 ## 팀원과 담당
 
-| 이름 | 담당 파일 |
-| --- | --- |
-| (이름) | `agent/adapter.py`, `agent/world.py` |
-| (이름) | `agent/pathfind.py` |
-| (이름) | `agent/strategy.py` |
+| 이름 | 담당 파일 | 하는 일 |
+| --- | --- | --- |
+| 문원 | `agent/adapter.py`, `agent/world.py` | 게임 API ↔ `World` 변환. RL 진행 시 환경·학습 |
+| 성혁 | `agent/algorithms.py` | 경로 탐색 등 순수 알고리즘 함수 |
+| 현진 | `agent/strategy.py` | `decide(world) -> actions` 판단 로직 |
+
+RL(강화학습)은 진행하기로 결정될 경우에만 착수하며, 환경 구현과 학습은 문원이 맡습니다.
+우선순위는 [onboarding.md](onboarding.md) 3절을 따릅니다.
 
 ## 시작하는 법
 

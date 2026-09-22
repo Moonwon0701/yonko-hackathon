@@ -126,7 +126,7 @@ Selector (위에서부터 시도)
 `agent/strategy.py`의 `decide(world) -> actions`가 BT의 뿌리를 한 번 틱(tick)하는 함수입니다.
 
 - 조건 노드는 `world` 객체만 읽습니다. API 형식은 모릅니다.
-- 행동 노드가 이동 경로를 알아야 하면 `agent/pathfind.py`의 순수 함수를 호출합니다.
+- 행동 노드가 이동 경로를 알아야 하면 `agent/algorithms.py`의 순수 함수를 호출합니다.
 - 노드 타입 자체(Sequence, Selector 등)는 게임과 무관한 범용 코드라, 양이 늘어나면 `bt.py`로
   따로 빼는 편이 깔끔합니다.
 

@@ -197,7 +197,7 @@ Claude Code 안에서 `/login`, 확인은 `/status`입니다.
 `claude`를 실행하면 프롬프트가 뜹니다. 여기서 그냥 한국어로 말하면 됩니다.
 
 ```
-> agent/pathfind.py에 A* 경로탐색을 추가해줘
+> agent/algorithms.py에 A* 경로탐색을 추가해줘
 ```
 
 ### 외워야 하는 키 5개
@@ -305,7 +305,7 @@ claude
 이제 Claude에게 이렇게 말할 수 있습니다.
 
 ```
-> pathfind.py에 A* 추가하고, 브랜치 만들어서 PR까지 올려줘
+> algorithms.py에 A* 추가하고, 브랜치 만들어서 PR까지 올려줘
 ```
 
 그러면 Claude가 `main`에서 pull → 새 브랜치 → 수정 → 커밋 → push → `gh pr create`까지 합니다.
@@ -377,7 +377,7 @@ claude
 ```
 
 ```
-> 오늘은 pathfind.py에 BFS 경로탐색을 추가할 거야. main에서 브랜치부터 만들어줘
+> 오늘은 algorithms.py에 BFS 경로탐색을 추가할 거야. main에서 브랜치부터 만들어줘
   ... (작업) ...
 > 테스트 돌려보고, 통과하면 커밋하고 PR 올려줘
 ```

@@ -17,13 +17,14 @@ TODO: 규칙과 API가 공개되면 이 절에 기록한다. 이 절이 비어 �
 ## 구조 규칙
 
 ```
-adapter.py  ->  world.py  ->  pathfind.py  ->  strategy.py
+adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 ```
 
 - `agent/adapter.py` — 게임 API 형식(엔드포인트, JSON 키, 인증)을 아는 **유일한** 파일.
   원시 응답을 `World`로 바꾸고, 우리 행동을 API 형식으로 되돌린다. 전략 판단은 넣지 않는다.
 - `agent/world.py` — 게임 상태를 담는 우리만의 데이터 구조. API 필드명도, 통신도 없다.
-- `agent/pathfind.py` — 알고리즘은 여기에 순수 함수로. 같은 입력이면 같은 출력, I/O 없음.
+- `agent/algorithms.py` — 경로 탐색을 포함한 알고리즘은 여기에 순수 함수로. 같은 입력이면
+  같은 출력, I/O 없음. 잡동사니 창고가 되지 않게, 게임 상태 판단이나 전략은 넣지 않는다.
 - `agent/strategy.py` — `decide(world) -> actions`. `World` 객체만 사용하고, API 형식이나
   네트워크 호출은 절대 쓰지 않는다.
 
@@ -31,11 +32,15 @@ adapter.py  ->  world.py  ->  pathfind.py  ->  strategy.py
 
 | 담당자 | 파일 |
 | --- | --- |
-| (이름) | `agent/adapter.py`, `agent/world.py` |
-| (이름) | `agent/pathfind.py` |
-| (이름) | `agent/strategy.py` |
+| 문원 | `agent/adapter.py`, `agent/world.py` |
+| 성혁 | `agent/algorithms.py` |
+| 현진 | `agent/strategy.py` |
 
 남의 담당 파일을 고쳐야 하면, 먼저 담당자에게 말하고 수정은 최소한으로 한다.
+
+RL(강화학습) 환경 구현과 학습은 **진행하기로 결정되면 문원이 맡는다.** 파일과 디렉터리 위치는
+게임 규칙이 공개된 뒤에 정한다. 그 전에 미리 만들지 않는다. RL을 언제 손대야 하는지는
+[onboarding.md](onboarding.md)의 3절을 따른다 — BT로 동작하는 에이전트가 먼저다.
 
 ## PR 규칙
 

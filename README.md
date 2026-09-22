@@ -21,9 +21,24 @@ cd yonko-hackathon
 
 python -m venv .venv
 source .venv/bin/activate     # Windows: .venv\Scripts\activate
+
+pip install -e ".[dev]"       # agent 패키지 + 개발 도구(pytest, ruff) 설치
 ```
 
-TODO: 게임 규칙과 API가 공개되면 필요한 패키지 설치와 실행 명령을 여기에 적는다.
+제대로 됐는지 확인:
+
+```bash
+python -c "import agent; print('ok')"
+pytest                        # 아직 테스트가 없으면 "no tests ran"이 정상
+```
+
+파이썬은 **3.12**를 씁니다(`.python-version`). 셋의 버전이 다르면 같은 코드가 다르게 돕니다.
+
+의존성을 추가할 때는 `pip install`만 하고 끝내지 말고 **`pyproject.toml`에 버전을 고정해서
+적은 뒤** PR로 올립니다. 그래야 나머지 두 명이 `git pull` 후 `pip install -e ".[dev]"` 한 번으로
+같은 환경이 됩니다.
+
+TODO: 게임 규칙과 API가 공개되면 실행 명령(`python -m agent` 등)을 여기에 적는다.
 
 ## 매일 작업 순서
 

@@ -1,0 +1,8 @@
+# 줄바꿈 문자를 통일해, 세 대의 컴퓨터(Windows/macOS/Linux)가 공백만 다른 diff나 충돌을
+# 만들지 않도록 합니다. Windows에서도 작업 폴더의 파일이 LF로 유지됩니다.
+# (VS Code, PyCharm 등 요즘 편집기는 모두 LF를 정상적으로 다룹니다.)
+* text=auto eol=lf
+
+# 이미지 등 이진 파일은 줄바꿈 변환 대상에서 제외합니다.
+*.png binary
+*.jpg binary

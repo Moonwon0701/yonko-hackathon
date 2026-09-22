@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yonko-agent"
+version = "0.1.0"
+description = "CTF 형식 게임을 플레이하는 해커톤용 AI 에이전트"
+requires-python = ">=3.12"
+
+# 게임 API가 아직 공개되지 않아 실행 의존성은 비어 있습니다.
+# HTTP 클라이언트 등은 docs/game-api.md 2절(통신 방식)을 채운 뒤에 여기 추가합니다.
+# 추가할 때는 버전을 == 로 고정해서 셋의 환경이 갈라지지 않게 합니다.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "ruff==0.16.8",
+]
+
+[tool.setuptools]
+packages = ["agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

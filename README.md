@@ -38,3 +38,5 @@ TODO: 게임 규칙과 API가 공개되면 필요한 패키지 설치와 실행 
 - [claude-code-setup.md](claude-code-setup.md) — Claude Code 설치, CLI/GUI 차이, GitHub 연결.
   **해커톤 시작 전에 먼저 읽으세요.**
 - [onboarding.md](onboarding.md) — GitHub 협업 방식, 행동 트리, 강화학습 배경 설명.
+- [docs/game-api.md](docs/game-api.md) — 게임 규칙·API 인테이크 양식. **규칙이 공개되면 제일
+  먼저 이걸 채웁니다.**

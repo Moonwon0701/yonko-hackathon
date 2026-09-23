@@ -15,22 +15,71 @@ RL(강화학습)은 진행하기로 결정될 경우에만 착수하며, 환경 
 
 ## 시작하는 법
 
-```bash
+팀 전원이 Windows이므로 **PowerShell 기준**으로 적습니다. Git Bash나 macOS·Linux는 아래
+"다른 셸을 쓴다면"을 보세요.
+
+```powershell
 git clone https://github.com/Moonwon0701/yonko-hackathon.git
 cd yonko-hackathon
 
-python -m venv .venv
-source .venv/bin/activate     # Windows: .venv\Scripts\activate
-
+py -m venv .venv              # python 아님. 아래 "python 대신 py를 쓰는 이유" 참고
+.venv\Scripts\activate
 pip install -e ".[dev]"       # agent 패키지 + 개발 도구(pytest, ruff) 설치
 ```
 
 제대로 됐는지 확인:
 
-```bash
+```powershell
 python -c "import agent; print('ok')"
 pytest                        # 아직 테스트가 없으면 "no tests ran"이 정상
 ```
+
+### python 대신 py를 쓰는 이유
+
+Windows에서 `python`은 실제 파이썬이 아니라 **Microsoft Store 바로가기**를 가리키는 경우가
+많습니다. 그 상태에서 `py -m venv` 대신 `python -m venv`를 치면 이렇게 나옵니다.
+
+```
+Python was not found; run without arguments to install from the Microsoft Store, ...
+```
+
+**이 메시지를 따라 Store에서 설치하지 마세요.** 파이썬이 두 개가 되어 더 꼬입니다. `py`가
+진짜 파이썬을 찾아주므로 `py -m venv .venv`로 만들면 됩니다.
+
+`py`가 필요한 것은 venv를 만드는 이 한 줄뿐입니다. 활성화하고 나면 `.venv\Scripts`가 PATH 맨
+앞에 붙어서 `python`이 venv 안의 파이썬을 가리키므로, 그 뒤로는 `python`을 그대로 씁니다.
+
+설치된 파이썬을 확인하려면 `py -0p`를 칩니다.
+
+### 활성화가 막히면 (PowerShell)
+
+Windows는 기본적으로 PowerShell 스크립트 실행을 막아둡니다. 그 상태라면 활성화에서 이 에러가
+납니다.
+
+```
+File ...\Activate.ps1 cannot be loaded because running scripts is disabled on this system.
+```
+
+한 번만 풀어주면 됩니다. 관리자 권한은 필요 없습니다.
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+### 다른 셸을 쓴다면
+
+활성화 명령만 다르고 나머지는 같습니다.
+
+| 환경 | 활성화 명령 |
+| --- | --- |
+| PowerShell | `.venv\Scripts\activate` |
+| Git Bash (Windows) | `source .venv/Scripts/activate` |
+| macOS · Linux | `source .venv/bin/activate` |
+
+Windows는 `bin`이 아니라 **`Scripts`** 입니다. macOS·Linux에서는 `py`가 없으므로
+`python3 -m venv .venv`로 만듭니다.
+
+### 버전과 의존성
 
 파이썬은 **3.12**를 씁니다(`.python-version`). 셋의 버전이 다르면 같은 코드가 다르게 돕니다.
 

@@ -42,8 +42,17 @@ def test_flags_split_across_buildings():
 
 def test_reserves_capture_cost_after_income():
     # 깃발병이 중립 광장 위에 있다: 비용 4는 이번 턴 수입(10)으로 충분하므로 자원 5를 모두 생산에 쓴다.
+    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명)
     w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5)
-    assert Spawn("W", 1) in strategy.decide(w)
+    assert Spawn("F", 1) in strategy.decide(w)
+
+
+def test_flags_come_before_warriors_when_below_minimum():
+    # 적 전투병이 훨씬 많아 전투병을 다 채울 수 없어도, 깃발병이 없으면 먼저 만든다 (9/27 리더보드 패배 경기)
+    w = world([building(0, (3, 7)), building(1, (5, 3))],
+              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=12)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
 def test_priority_orders_simultaneous_captures_by_value():
@@ -198,4 +207,20 @@ def test_warriors_teleport_to_far_front_at_most_five():
               units={("Y", "W", (1, 1)): 7, ("K", "F", (13, 11)): 1}, gold=0)
     actions = strategy.decide(w)
     assert Tele((1, 1), "W", 5, (13, 13)) in actions
-    assert [a for a in actions if isinstance(a, Move) and a.src == (1, 1) and a.count == 2]  # 나머지 2명은 걸어간다
+    # 나머지 2명은 걸으면 22턴, 다음 턴 순간이동하면 4턴이라 역에서 기다린다
+    assert not [a for a in actions if isinstance(a, Move) and a.src == (1, 1)]
+
+
+def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce():
+    # 걸으면 8칸, 순간이동 경로는 5턴(역 → 역 1 + 걷기 4) → 3턴 이득. 턴당 5명이라 대기열이 15명을 넘으면
+    # 기다리는 것보다 걷는 게 빠르다. 역 옆 칸의 인원은 역으로 들어오지 않는다(들어왔다 물러나기를 반복했다).
+    from agent.world import Tele
+    w = world([building(0, (7, 1), "STATION", owner="Y", score=1),
+               building(1, (7, 13), "STATION", owner="Y", score=1)],
+              units={("Y", "W", (7, 1)): 30, ("Y", "W", (6, 1)): 10, ("K", "F", (7, 9)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert Tele((7, 1), "W", 5, (7, 13)) in actions
+    moves = [a for a in actions if isinstance(a, Move) and a.kind == "W"]
+    assert sum(m.count for m in moves if m.src == (7, 1)) == 15  # 10명은 역에서 기다리고 15명은 걷는다
+    assert all(m.dst == (7, 2) for m in moves if m.src == (7, 1))
+    assert not [m for m in moves if m.src == (6, 1) and m.dst == (7, 1)]

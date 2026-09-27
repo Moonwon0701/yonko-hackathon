@@ -34,13 +34,17 @@
 
 ```
 adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
+                                   bt.py  ---------^
 ```
 
 - `agent/adapter.py` — 게임 입출력 형식(stdin 블록, 명령 줄 문법)을 아는 **유일한** 파일.
   입력 텍스트를 `World`로 바꾸고, 우리 행동을 명령 줄로 되돌린다. 전략 판단은 넣지 않는다.
 - `agent/world.py` — 게임 상태를 담는 우리만의 데이터 구조. API 필드명도, 통신도 없다.
+  규칙 그대로인 계산(전투병 값, 점령 한 단계 비용 등)은 `World` 메서드로 둔다. 추측·판단은 넣지 않는다.
 - `agent/algorithms.py` — 경로 탐색을 포함한 알고리즘은 여기에 순수 함수로. 같은 입력이면
   같은 출력, I/O 없음. 잡동사니 창고가 되지 않게, 게임 상태 판단이나 전략은 넣지 않는다.
+- `agent/bt.py` — 행동 트리 노드(Selector·Sequence·Condition·Act·Latch). 게임을 모르는 범용 코드.
+  트리 조립은 strategy.py가 한다.
 - `agent/strategy.py` — `decide(world) -> actions`. `World` 객체만 사용하고, API 형식이나
   네트워크 호출은 절대 쓰지 않는다. 행동은 `world.py`의 `Spawn`·`Move` 등으로 돌려준다.
 - `main.py` — 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다.
@@ -54,12 +58,12 @@ adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 
 | 담당자 | 파일 |
 | --- | --- |
-| 문원 | `agent/adapter.py`, `agent/world.py`, `agent/strategy.py`(현진과 공동) |
+| 문원 | `agent/adapter.py`, `agent/world.py`, `agent/strategy.py`·`agent/bt.py`(현진과 공동) |
 | 성혁 | `agent/algorithms.py` |
-| 현진 | `agent/strategy.py`(문원과 공동) |
+| 현진 | `agent/strategy.py`, `agent/bt.py` (둘 다 문원과 공동) |
 
 남의 담당 파일을 고쳐야 하면, 먼저 담당자에게 말하고 수정은 최소한으로 한다.
-`agent/strategy.py`는 현진과 문원의 **공동 담당**이다. 둘 다 자기 담당 파일로 다룬다.
+`agent/strategy.py`와 `agent/bt.py`는 현진과 문원의 **공동 담당**이다. 둘 다 자기 담당 파일로 다룬다.
 
 ## 전략 방식: 규칙 기반
 
@@ -87,7 +91,7 @@ adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 - **내 담당 파일만 고친 PR** — 올린 사람이 바로 머지한다.
 - **남의 담당 파일이 포함된 PR** — 그 파일의 담당자가 확인한 뒤 **담당자가 머지한다.** 올린
   사람이 먼저 머지하지 않는다. PR 설명에 담당자를 적고 팀 채팅에 알린다.
-- **공동 담당 파일(`agent/strategy.py`)만 고친 PR** — 공동 담당자 중 누가 올렸든 올린 사람이 머지하고,
+- **공동 담당 파일(`agent/strategy.py`, `agent/bt.py`)만 고친 PR** — 공동 담당자 중 누가 올렸든 올린 사람이 머지하고,
   다른 공동 담당자에게 팀 채팅으로 알린다. 같은 부분을 동시에 고치지 않도록 작업 전에 서로 말한다.
 - `agent/world.py`는 세 파일이 공유하는 계약이므로, 필드를 추가하거나 형태를 바꾸면 담당자
   외 나머지 두 명에게도 알린다.

@@ -93,6 +93,10 @@ def test_self_play_is_mirror_symmetric():
         flip = {"U": "D", "D": "U", "L": "R", "R": "L"}
         if t[0] == "MOVE":
             return f"MOVE {14 - int(t[1])} {14 - int(t[2])} {t[3]} {t[4]} {flip[t[5]]}"
+        if t[0] == "TELE":
+            return f"TELE {14 - int(t[1])} {14 - int(t[2])} {t[3]} {t[4]} {14 - int(t[5])} {14 - int(t[6])}"
+        if t[0] == "SPAWN" and len(t) == 5:  # 병원 생산
+            return f"SPAWN {t[1]} {t[2]} {14 - int(t[3])} {14 - int(t[4])}"
         if t[0] == "PRIORITY":
             xy = [14 - int(v) for v in t[1:]]
             return " ".join(["PRIORITY", *map(str, xy)])
@@ -159,3 +163,19 @@ def test_decide_stays_fast_with_huge_army():
     start = time.perf_counter()
     strategy.decide(w)
     assert (time.perf_counter() - start) * 1000 < 5
+
+
+# ------------------------------------------------------------------ M4
+
+
+def test_spawns_at_hospital_closer_to_targets():
+    w = world([building(0, (10, 7), "HOSPITAL", owner="Y", score=1), building(1, (12, 7), "LIBRARY")], gold=10)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns and all(a.at == (10, 7) for a in spawns)
+
+
+def test_skips_hospital_that_enemy_warriors_can_reach():
+    w = world([building(0, (10, 7), "HOSPITAL", owner="Y", score=1), building(1, (12, 7), "LIBRARY")],
+              units={("K", "W", (10, 8)): 2}, gold=10)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns and all(a.at is None for a in spawns)

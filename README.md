@@ -8,9 +8,9 @@
 
 | 이름 | 담당 파일 | 하는 일 |
 | --- | --- | --- |
-| 문원 | `agent/adapter.py`, `agent/world.py` | 게임 입출력 ↔ `World` 변환. 필요 시 로컬 시뮬레이터 |
+| 문원 | `agent/adapter.py`, `agent/world.py`, `agent/strategy.py`(공동) | 게임 입출력 ↔ `World` 변환, 로컬 시뮬레이터, 전략(현진과 공동) |
 | 성혁 | `agent/algorithms.py` | 경로 탐색 등 순수 알고리즘 함수 |
-| 현진 | `agent/strategy.py` | `decide(world) -> actions` 판단 로직 |
+| 현진 | `agent/strategy.py`(공동) | `decide(world) -> actions` 판단 로직(문원과 공동) |
 
 전략은 규칙 기반입니다. 행동 트리(BT)가 국면을 고르고, 효용 점수가 건물 가치를 매겨 유닛에 목표를
 나눕니다. 운영진 답변(9/27)에 따르면 소스 코드 안에 적은 상수는 학습한 가중치라도 허용되고, 별도 데이터
@@ -166,7 +166,8 @@ Git Bash의 `tar`는 ZIP이 아니라 tar 파일을 만듭니다. 둘 다 서버
 - **효과가 확인된 것만 넣습니다.** 전략 변경은 `arena`로 200경기 이상 두고, 결과는 넣든 빼든
   [docs/benchmarks.md](docs/benchmarks.md)에 적습니다
 - **LLM으로 파일을 고치면** 같은 PR에 `docs/llm-log/` 기록 파일을 넣습니다. 보고서 필수 항목입니다
-- 모든 변경은 브랜치 → PR로 `main`에 들어갑니다. 남의 담당 파일이 들어간 PR은 담당자가 확인하고 머지합니다
+- 모든 변경은 브랜치 → PR로 `main`에 들어갑니다. 남의 담당 파일이 들어간 PR은 담당자가 확인하고 머지합니다.
+  공동 담당인 `strategy.py`만 고친 PR은 올린 사람이 머지하고 다른 담당자에게 알립니다
 
 ## 문서
 

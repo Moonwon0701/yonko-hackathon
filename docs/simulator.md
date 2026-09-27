@@ -52,7 +52,7 @@ python -m sim arena . git:main --maps data/server-replays
 python -m sim match . starter:example_lv2 --map-file "data/server-replays/2026-09-27_high_01/replay.json" --open
 ```
 
-- 모의 전투는 상대 봇이 달라도 같은 맵을 다시 쓴다(9/27: 중·상 봇 19경기 = 고유 맵 10개). 같은 지형의
+- 모의 전투는 상대 봇이 달라도 같은 맵을 다시 쓴다(9/27: 모의 전투 3회 20경기 = 고유 맵 10개). 같은 지형의
   리플레이에서 공개된 점수를 합치고, 그래도 모르는 점수는 대칭 짝 → 규칙 범위에서 시드로 채운다
 - 본진은 리플레이 주인(`side`)의 유닛이 처음 나타난 칸에 가까운 `H`가 그 진영이다
 - 새 리플레이를 받으면 같은 폴더 규칙으로 넣기만 하면 된다. `tests/test_sim_server_maps.py`가 맵 수와 규칙

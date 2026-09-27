@@ -3,7 +3,7 @@
 - 날짜: 2026-09-28
 - 요청한 사람: 문원
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI
-- PR: (올린 뒤 번호 기록) (브랜치 `moonwon/restructure`)
+- PR: #39 (브랜치 `moonwon/restructure`)
 
 ## 프롬프트 (원문 그대로)
 

@@ -3,7 +3,7 @@
 - 날짜: 2026-09-27
 - 요청한 사람: 문원
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI
-- PR: (PR 생성 후 기록) (브랜치 `moonwon/official-devtool`)
+- PR: #30 (브랜치 `moonwon/official-devtool`)
 
 ## 프롬프트 (원문 그대로)
 

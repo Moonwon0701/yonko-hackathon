@@ -140,3 +140,22 @@ def test_warrior_guards_our_building_when_enemy_flag_approaches():
     actions = strategy.decide(w)
     assert strategy.note() == "THREAT"
     assert not [a for a in actions if isinstance(a, Move) and a.kind == "W"]
+
+
+def test_decide_stays_fast_with_huge_army():
+    """전투병이 수백 명이어도 계산이 유닛 수에 비례해 늘지 않아야 한다 (서버는 로컬보다 약 12배 느리다).
+
+    적 깃발병이 멀리 한 명뿐이라 과제 없는 전투병 수백 명이 모두 그쪽으로 간다. 전투병마다 BFS를 하던
+    이전 코드는 여기서 로컬 약 17 ms, 지금은 1 ms 미만.
+    """
+    import time
+    buildings = [building(i, (1 + i % 4, 1 + 3 * (i // 4)), owner="Y", score=1) for i in range(16)]
+    buildings.append(building(16, (14, 14), owner="K", score=1))
+    taken = {b.pos for b in buildings}
+    units = {("Y", "W", (x, y)): 4 for x in range(8) for y in range(0, 15, 2) if (x, y) not in taken}  # 224명
+    units[("K", "F", (14, 13))] = 1
+    w = world(buildings, units=units, gold=40, turn=80)
+    strategy.decide(w)  # 거리표 캐시 채우기 (실제 경기에서는 앞 턴들이 채운다)
+    start = time.perf_counter()
+    strategy.decide(w)
+    assert (time.perf_counter() - start) * 1000 < 5

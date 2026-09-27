@@ -55,6 +55,20 @@ def distance_map(sources: Collection[Pos], passable: Callable[[Pos], bool]) -> d
     return dist
 
 
+def threat_map(stacks: Collection[tuple[Pos, int]], passable: Callable[[Pos], bool]) -> dict[Pos, int]:
+    """다음 턴 각 칸에 모일 수 있는 최대 인원. 각 무리는 제자리 또는 상하좌우 한 칸으로 갈 수 있다.
+
+    무리를 나눠 여러 칸으로 보낼 수도 있으므로, 칸마다 닿을 수 있는 무리의 인원을 모두 더한다(최악의 경우).
+    """
+    threat: dict[Pos, int] = {}
+    for (x, y), n in stacks:
+        for dx, dy in ((0, 0), *DEFAULT_ORDER):
+            pos = (x + dx, y + dy)
+            if passable(pos):
+                threat[pos] = threat.get(pos, 0) + n
+    return threat
+
+
 def step_along(start: Pos, dist: dict[Pos, int], order: Sequence[Pos] = DEFAULT_ORDER) -> Pos | None:
     """거리표 `dist`(목표에서 잰 거리)를 한 칸 줄이는 이웃 칸. 거리가 같으면 `order` 순서.
 

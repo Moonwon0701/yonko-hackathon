@@ -72,6 +72,23 @@ python -m sim match . starter:example_lv2 --map-file "data/server-replays/2026-0
 - 새 리플레이를 받으면 같은 폴더 규칙으로 넣기만 하면 된다. `tests/test_sim_server_maps.py`가 맵 수와 규칙
   조건을 확인하므로, 맵이 늘면 그 테스트의 맵 개수를 고친다
 
+### 행동 비교 (`diff`) — 리팩터링 검증
+
+구조만 바꾸고 행동은 그대로여야 하는 변경은 승률이 아니라 **명령이 똑같은지**로 확인한다. 승률 50%·전부
+무승부는 행동이 조금 달라도 나올 수 있다.
+
+```powershell
+# 지금 봇(.)이 main과 매 턴 같은 명령을 내는가 (상대는 main)
+python -m sim diff . git:main --seeds 100
+
+# 상대를 바꿔서: 크게 이기는 판·지는 판 등 다른 국면에서도 같은가
+python -m sim diff . git:main --vs starter:example_lv2 --seeds 100
+```
+
+- 시드마다 B 대 상대(기준)와 A 대 상대를 A가 Y·K일 때 한 번씩 두고, A 쪽 명령을 턴마다 비교한다
+- 처음 달라진 턴과 두 명령 목록을 보여 주고, 하나라도 다르면 종료 코드 1
+- 시간 제한은 끈다(느려서 생긴 시간 초과를 행동 차이로 보지 않게)
+
 ### arena 결과 읽기
 
 ```

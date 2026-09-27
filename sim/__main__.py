@@ -2,6 +2,7 @@
 
     python -m sim match . starter:example_lv2 --seed 3 --open
     python -m sim arena . git:main --seeds 50
+    python -m sim diff . git:main --seeds 50
     python -m sim map --seed 3
 
 봇 지정 방법은 sim/bots.py 맨 위, 자세한 사용법은 docs/simulator.md.
@@ -16,7 +17,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from sim import arena, bots, mapgen, match, viewer
+from sim import arena, bots, diff, mapgen, match, viewer
 
 RUNS = Path("runs")
 
@@ -80,6 +81,23 @@ def cmd_arena(args) -> None:
     print(f"결과 폴더: {out}  (리플레이 {saved}개, {time.perf_counter() - start:.1f}s)")
 
 
+def cmd_diff(args) -> None:
+    a, b = bots.resolve(args.a), bots.resolve(args.b)
+    vs = bots.resolve(args.vs) if args.vs else None
+    seeds = list(range(args.seed, args.seed + args.seeds))
+    start = time.perf_counter()
+
+    def progress(done, total):
+        print(f"\r{done}/{total} 맵", end="", file=sys.stderr, flush=True)
+
+    rows = diff.run(a, b, seeds, jobs=args.jobs, vs=vs, progress=progress)
+    print(file=sys.stderr)
+    print(diff.summarize(rows, a.name, b.name, vs.name if vs else None))
+    print(f"({time.perf_counter() - start:.1f}s)")
+    if any(r["turn"] is not None for r in rows):
+        sys.exit(1)
+
+
 def cmd_map(args) -> None:
     spec = _load_map(args)
     print("\n".join(spec.rows))
@@ -119,6 +137,15 @@ def main(argv: list[str] | None = None) -> None:
                    help="리플레이 저장: A가 이기지 못한 경기만(기본)/전부/안 함")
     common(a)
     a.set_defaults(func=cmd_arena)
+
+    d = sub.add_parser("diff", help="A가 B와 매 턴 같은 명령을 내는지 확인 (행동을 바꾸지 않는 리팩터링 검증)")
+    d.add_argument("a", help="확인할 봇 (A)")
+    d.add_argument("b", help="기준 봇 (B)")
+    d.add_argument("--vs", help="두 봇이 상대할 봇 (기본: B)")
+    d.add_argument("--seed", type=int, default=0, help="시작 시드")
+    d.add_argument("--seeds", type=int, default=20, help="맵 개수 (맵마다 A가 Y·K로 한 번씩)")
+    d.add_argument("--jobs", type=int, default=arena.default_jobs(), help="동시에 처리할 맵 수")
+    d.set_defaults(func=cmd_diff)
 
     mp = sub.add_parser("map", help="맵 출력")
     common(mp)

@@ -37,6 +37,7 @@ def _play_one(task: tuple) -> dict:
     if res["ignored_commands"] is not None:
         row["ignored"] = {"A": res["ignored_commands"][a_team], "B": res["ignored_commands"][b_team]}
     if save_mode == "all" or (save_mode == "losses" and outcome != "win"):
+        replay["view"] = a_team  # 평가 대상(A, 보통 우리 봇)이 아는 정보만 보이게 연다
         path = Path(save_dir) / f"seed{seed:04d}-A_is_{a_team}-{outcome}.html"
         viewer.write_html(replay, path)
         row["replay"] = str(path)

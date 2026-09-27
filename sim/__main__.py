@@ -35,6 +35,8 @@ def cmd_match(args) -> None:
     pair = {"Y": bots.resolve(args.y), "K": bots.resolve(args.k)}
     start = time.perf_counter()
     replay = match.play(spec, pair, time_scale=_time_scale(args))
+    if args.view != "all":
+        replay["view"] = args.view
     res = replay["result"]
     stamp = time.strftime("%m%d-%H%M%S")
     out = Path(args.out) if args.out else RUNS / f"match-{stamp}-seed{args.seed}.html"
@@ -96,6 +98,8 @@ def main(argv: list[str] | None = None) -> None:
     m.add_argument("y", help="Y(연세) 봇")
     m.add_argument("k", help="K(고려) 봇")
     m.add_argument("--open", action="store_true", help="끝나면 브라우저로 열기")
+    m.add_argument("--view", choices=("all", "Y", "K"), default="all",
+                   help="리플레이를 열 때 기본 시점: all(관전자) 또는 그 팀이 아는 정보만")
     common(m)
     m.set_defaults(func=cmd_match)
 

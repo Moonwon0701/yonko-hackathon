@@ -98,6 +98,26 @@ def test_our_main_vs_starter_full_game():
     assert len(replay["frames"]) == res["turn"] + 1
 
 
+def test_team_view_matches_what_bots_received():
+    """뷰어의 팀 시점은 frames[i]["revealed"]로 점수를 가린다. 그게 봇이 실제로 받은 입력과 같은지."""
+    replay = match.play(mapgen.generate(6), {"Y": bots.resolve(str(ROOT)),
+                                              "K": bots.resolve("starter:example_lv1")})
+    assert all(replay["init"][t].startswith(f"INIT 15 15\nTEAM {t}\n") for t in rules.TEAMS)
+    checked = 0
+    for i, frame in enumerate(replay["frames"]):
+        if "input" not in frame:
+            assert i == len(replay["frames"]) - 1  # 경기가 끝난 뒤 상태에는 입력이 없다
+            continue
+        for team in rules.TEAMS:
+            lines = frame["input"][team].splitlines()
+            assert lines[0] == f"TURN {i + 1}"
+            shown = {int(tok[0]) for tok in (ln.split() for ln in lines) if len(tok) == 7
+                     and tok[6] != "-1"}
+            assert shown == set(frame["revealed"][team])
+            checked += 1
+    assert checked > 40
+
+
 def write_bot(tmp_path: Path, name: str, body: str) -> bots.BotSpec:
     path = tmp_path / f"{name}.py"
     path.write_text(textwrap.dedent(body), encoding="utf-8")

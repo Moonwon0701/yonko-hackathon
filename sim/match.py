@@ -22,8 +22,11 @@ def play(spec: MapSpec, bots: dict[str, BotSpec], *, time_scale: float | None = 
         for t in rules.TEAMS:
             procs[t].send(game.init_text(t))
         while not game.over:
+            texts = {t: game.turn_text(t) for t in rules.TEAMS}
+            if record:
+                frames[-1]["input"] = texts  # 이 상태에서 각 봇이 받는 입력 원문 (팀 시점 보기용)
             for t in rules.TEAMS:
-                procs[t].send(game.turn_text(t))
+                procs[t].send(texts[t])
             replies = {t: procs[t].receive() for t in rules.TEAMS}
             for t in rules.TEAMS:
                 timing[t].append(round(replies[t].ms, 2))
@@ -68,6 +71,7 @@ def play(spec: MapSpec, bots: dict[str, BotSpec], *, time_scale: float | None = 
                            "score": b.score} for b in spec.buildings],
             "total_score": spec.total_score,
         },
+        "init": {t: game.init_text(t) for t in rules.TEAMS},
         "frames": frames,
         "turns": turns,
         "assumptions": ASSUMPTIONS,

@@ -346,26 +346,39 @@ def move_warriors(t: Turn) -> None:
     w_after: Counter[Pos] = Counter()
     w_steps: Counter[tuple[Pos, Pos]] = Counter()
     w_jumps: Counter[tuple[Pos, Pos]] = Counter()  # 순간이동을 원하는 (출발 역, 도착 역) → 인원
-    walk_of: dict[tuple[Pos, Pos], Pos | None] = {}  # 순간이동을 못 하면 대신 걸을 칸
-    for (pos, goal), n in moving.items():
-        step = step_along(pos, goal_tele if goal is None else t.tele_to(goal), order, gates)
+    groups = []
+    for i, ((pos, goal), n) in enumerate(moving.items()):
+        walk = t.goal_dist if goal is None else t.dist_to(goal)
+        tele = goal_tele if goal is None else t.tele_to(goal)
+        groups.append((pos not in gates, tele.get(pos, 0), key(pos), i, pos, n, walk, tele))
+    queued = 0  # 이번 턴 순간이동 경로에 태운 인원 = 대기열. 역에 이미 선 인원부터 센다
+    for *_, pos, n, walk, tele in sorted(groups):
+        # 순간이동은 턴당 TELE_MAX_UNITS명뿐이다. 대기열에서 기다릴 턴까지 더해도 걷기보다 빠른 인원만
+        # 역으로 보낸다. (전원을 역으로 보내면 못 탄 인원이 걸어서 물러났다가 다음 턴 돌아오기를 반복했다 —
+        # 9/27 리더보드 리플레이에서 역 옆 두 칸을 오간 전투병 최대 66명)
+        via = 0
+        if gates and pos in tele:
+            gain = walk.get(pos, 10**6) - tele[pos]
+            via = min(n, max(0, TELE_MAX_UNITS * gain - queued))
+        queued += via
+        step = step_along(pos, tele, order, gates) if via else None
         if step and manhattan(pos, step) > 1:
-            w_jumps[(pos, step)] += n
-            walk_of[(pos, step)] = step_along(pos, t.goal_dist if goal is None else t.dist_to(goal), order)
-            continue
-        w_after[step or pos] += n
-        if step:
-            w_steps[(pos, step)] += n
+            w_jumps[(pos, step)] += via  # 도착 인원(w_after)은 순간이동 한 쌍을 고른 뒤에 센다
+        else:
+            if step:
+                w_steps[(pos, step)] += via
+            w_after[step or pos] += via
+        step = step_along(pos, walk, order)
+        if step and n - via:
+            w_steps[(pos, step)] += n - via
+        w_after[step or pos] += n - via
     jump = pick_jump(w_jumps, key)
     for (src, dst), n in w_jumps.items():
         sent = min(n, TELE_MAX_UNITS) if (src, dst) == jump else 0
         if sent:
             t.actions.append(Tele(src, "W", sent, dst))
             w_after[dst] += sent
-        walk = walk_of[(src, dst)]
-        w_after[walk or src] += n - sent
-        if walk and n - sent:
-            w_steps[(src, walk)] += n - sent
+        w_after[src] += n - sent  # 못 탄 인원은 역에서 다음 차례를 기다린다
     t.actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
     t.w_after = w_after
 

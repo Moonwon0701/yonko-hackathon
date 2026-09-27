@@ -198,4 +198,20 @@ def test_warriors_teleport_to_far_front_at_most_five():
               units={("Y", "W", (1, 1)): 7, ("K", "F", (13, 11)): 1}, gold=0)
     actions = strategy.decide(w)
     assert Tele((1, 1), "W", 5, (13, 13)) in actions
-    assert [a for a in actions if isinstance(a, Move) and a.src == (1, 1) and a.count == 2]  # 나머지 2명은 걸어간다
+    # 나머지 2명은 걸으면 22턴, 다음 턴 순간이동하면 4턴이라 역에서 기다린다
+    assert not [a for a in actions if isinstance(a, Move) and a.src == (1, 1)]
+
+
+def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce():
+    # 걸으면 8칸, 순간이동 경로는 5턴(역 → 역 1 + 걷기 4) → 3턴 이득. 턴당 5명이라 대기열이 15명을 넘으면
+    # 기다리는 것보다 걷는 게 빠르다. 역 옆 칸의 인원은 역으로 들어오지 않는다(들어왔다 물러나기를 반복했다).
+    from agent.world import Tele
+    w = world([building(0, (7, 1), "STATION", owner="Y", score=1),
+               building(1, (7, 13), "STATION", owner="Y", score=1)],
+              units={("Y", "W", (7, 1)): 30, ("Y", "W", (6, 1)): 10, ("K", "F", (7, 9)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert Tele((7, 1), "W", 5, (7, 13)) in actions
+    moves = [a for a in actions if isinstance(a, Move) and a.kind == "W"]
+    assert sum(m.count for m in moves if m.src == (7, 1)) == 15  # 10명은 역에서 기다리고 15명은 걷는다
+    assert all(m.dst == (7, 2) for m in moves if m.src == (7, 1))
+    assert not [m for m in moves if m.src == (6, 1) and m.dst == (7, 1)]

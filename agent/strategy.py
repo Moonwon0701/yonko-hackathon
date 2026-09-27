@@ -64,6 +64,7 @@ from agent.world import (
 
 MIN_WARRIORS = 3  # 전투병 최소 인원 (적 전투병이 적어도 이만큼은 둔다)
 SPARE_FLAGS = 1  # 목표 건물 수보다 이만큼 더 많은 깃발병까지만 만든다
+MIN_FLAGS = 2  # 깃발병이 이보다 적으면 전투병보다 먼저 만든다 (목표가 있을 때만)
 
 # 점수를 모를 때의 기대값. 규칙: 신촌·안암 건물 1~2점, 중앙 건물 2~4점
 SIDE_SCORE_GUESS = 1.5
@@ -299,7 +300,8 @@ def plan_captures(t: Turn) -> None:
 
 
 def produce(t: Turn) -> None:
-    """생산: 전투병(적 + 추가 인원까지) → 깃발병(목표 수만큼) → 남으면 전투병. 위치는 M4 병원 생산."""
+    """생산: 깃발병(MIN_FLAGS까지) → 전투병(적 + 추가 인원까지) → 깃발병(목표 수만큼) → 남으면 전투병.
+    위치는 M4 병원 생산."""
     world, me, key = t.world, t.world.me, t.key
     budget = t.budget
     wc = warrior_cost(world, me)
@@ -307,11 +309,17 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.profile.extra_warriors)
-    make_w = min(max(0, want_w - nw), budget // wc) if nf or budget >= fc + wc else 0
-    budget -= make_w * wc
     want_f = max(0, len(t.free_targets) + SPARE_FLAGS - nf)
-    make_f = min(budget // fc, want_f)
+    # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
+    # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
+    # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
+    make_f = min(want_f, max(0, MIN_FLAGS - nf), budget // fc)
     budget -= make_f * fc
+    make_w = min(max(0, want_w - nw), budget // wc)
+    budget -= make_w * wc
+    more_f = min(budget // fc, want_f - make_f)
+    make_f += more_f
+    budget -= more_f * fc
     if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
         make_w += budget // wc
     t.make_w, t.make_f = make_w, make_f

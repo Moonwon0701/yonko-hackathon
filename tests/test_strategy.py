@@ -42,8 +42,17 @@ def test_flags_split_across_buildings():
 
 def test_reserves_capture_cost_after_income():
     # 깃발병이 중립 광장 위에 있다: 비용 4는 이번 턴 수입(10)으로 충분하므로 자원 5를 모두 생산에 쓴다.
+    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명)
     w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5)
-    assert Spawn("W", 1) in strategy.decide(w)
+    assert Spawn("F", 1) in strategy.decide(w)
+
+
+def test_flags_come_before_warriors_when_below_minimum():
+    # 적 전투병이 훨씬 많아 전투병을 다 채울 수 없어도, 깃발병이 없으면 먼저 만든다 (9/27 리더보드 패배 경기)
+    w = world([building(0, (3, 7)), building(1, (5, 3))],
+              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=12)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
 def test_priority_orders_simultaneous_captures_by_value():

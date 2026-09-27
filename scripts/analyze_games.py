@@ -22,8 +22,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from sim import arena, mapgen, match  # noqa: E402
-from sim.bots import resolve  # noqa: E402
+from sim import arena, mapgen, match
+from sim.bots import resolve
 
 KINDS = ("ENG", "HALL", "LIBRARY", "HOSPITAL", "DEPOT", "STATION", "PLAZA", "WATCH")
 CHECKPOINTS = (10, 20, 30, 50, 80, 120)
@@ -60,6 +60,12 @@ def summarize_game(task: tuple) -> dict:
     }
 
 
+def kind_share(r: dict, kind: str, side: int, lo: int, hi: int) -> float:
+    """lo~hi-1턴 동안 한쪽(0 = A, 1 = B)이 이 종류 건물을 평균 몇 개 가졌나."""
+    xs = r["kind"][kind][lo:hi]
+    return sum(x[side] for x in xs) / max(1, len(xs))
+
+
 def report(rows: list[dict]) -> str:
     out = [f"경기 {len(rows)}: " + " · ".join(f"{k} {v}" for k, v in Counter(r["result"] for r in rows).items())]
     for label, key in (("이긴 경기", "win"), ("진 경기", "loss")):
@@ -79,10 +85,9 @@ def report(rows: list[dict]) -> str:
         for k in KINDS:
             cells = []
             for lo, hi in SPANS:
-                def share(r, side):
-                    xs = r["kind"][k][lo:hi]
-                    return sum(x[side] for x in xs) / max(1, len(xs))
-                cells.append(f"{lo}-{hi - 1}턴 {st.mean(share(r, 0) for r in grp):.2f}:{st.mean(share(r, 1) for r in grp):.2f}")
+                a = st.mean(kind_share(r, k, 0, lo, hi) for r in grp)
+                b = st.mean(kind_share(r, k, 1, lo, hi) for r in grp)
+                cells.append(f"{lo}-{hi - 1}턴 {a:.2f}:{b:.2f}")
             out.append(f"    {k:8s} " + " | ".join(cells))
         lost = Counter()
         for r in grp:

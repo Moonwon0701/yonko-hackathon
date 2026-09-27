@@ -27,7 +27,11 @@ def test_full_game_answers_every_turn():
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines().count("END") == 160
-    assert result.stderr == ""
+    # stderr에는 INIT 원문과 턴 로그만 있어야 한다. 예외 로그("[turn]" 등)가 있으면 실패.
+    log = result.stderr.splitlines()
+    assert "Traceback" not in result.stderr and not any(line.startswith("[") for line in log)
+    assert sum(line.startswith("#t ") for line in log) == 160
+    assert len(result.stderr.encode()) < 16 * 1024  # 경기당 1 MiB 한도에 한참 못 미쳐야 한다
 
 
 def test_exception_in_decide_still_prints_end(monkeypatch, capsys):

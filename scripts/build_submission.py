@@ -69,9 +69,15 @@ def smoke_test(zip_path: Path) -> None:
     ends = result.stdout.splitlines().count("END")
     if result.returncode != 0 or ends != TURNS:
         sys.exit(f"스모크 테스트 실패: 종료 코드 {result.returncode}, END {ends}/{TURNS}\n{result.stderr}")
-    if result.stderr:
-        print(f"경고: stderr 출력이 있음\n{result.stderr[:2000]}")
-    print(f"스모크 테스트 통과: {TURNS}턴 모두 END, 전체 {elapsed:.2f}s (턴당 평균 {elapsed / TURNS * 1000:.1f} ms)")
+    # stderr에는 INIT 원문과 "#t" 턴 로그가 정상으로 나온다. 예외 로그("[turn]" 등)만 경고한다.
+    errors = [line for line in result.stderr.splitlines() if line.startswith("[") or "Traceback" in line]
+    if errors:
+        print(f"경고: 예외 로그가 있음\n{result.stderr[:2000]}")
+    turn_ms = [float(line.split()[2].removesuffix("ms"))
+               for line in result.stderr.splitlines() if line.startswith("#t ")]
+    slowest = f", 턴 계산 최대 {max(turn_ms):.1f} ms" if turn_ms else ""
+    print(f"스모크 테스트 통과: {TURNS}턴 모두 END, 전체 {elapsed:.2f}s "
+          f"(턴당 평균 {elapsed / TURNS * 1000:.1f} ms{slowest}), stderr {len(result.stderr.encode())} B")
 
 
 def main() -> None:

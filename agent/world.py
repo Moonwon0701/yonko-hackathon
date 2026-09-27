@@ -96,6 +96,17 @@ class World:
             if b.owner == team and (kind is None or b.kind == kind)
         ]
 
+    def warrior_cost(self, team: Team) -> int:
+        """그 팀의 전투병 한 명 값. 공학관 1개당 ENG_DISCOUNT 할인, ENG_COST_FLOOR 아래로는 안 내려간다."""
+        return max(ENG_COST_FLOOR, UNIT_COST["W"] - len(self.owned(team, "ENG")) * ENG_DISCOUNT)
+
+    def stage_cost(self, b: Building, team: Team | None = None) -> int:
+        """그 팀(기본: 우리)이 이 건물을 한 단계 점령하는 비용. 도서관을 가지면 할인."""
+        cost = PLAZA_CAPTURE_COST if b.kind == "PLAZA" else CAPTURE_COST
+        if self.owned(team or self.me, "LIBRARY"):
+            cost = max(MIN_CAPTURE_COST, cost - LIBRARY_DISCOUNT)
+        return cost
+
     def known_score(self, b: Building) -> int | None:
         """확실히 아는 점수. 공개된 점수, 공개된 대칭 짝의 점수, 광장(항상 3점) 순. 모르면 None."""
         if b.score is not None:

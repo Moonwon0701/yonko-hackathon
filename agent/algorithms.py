@@ -11,6 +11,11 @@ Pos = tuple[int, int]
 DEFAULT_ORDER: tuple[Pos, ...] = ((0, -1), (0, 1), (-1, 0), (1, 0))
 
 
+def manhattan(a: Pos, b: Pos) -> int:
+    """두 칸 사이의 상하좌우 거리(장애물 무시)."""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
 def first_step(
     start: Pos,
     targets: Collection[Pos],

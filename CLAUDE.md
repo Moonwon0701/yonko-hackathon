@@ -42,7 +42,11 @@ adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 - `agent/algorithms.py` — 경로 탐색을 포함한 알고리즘은 여기에 순수 함수로. 같은 입력이면
   같은 출력, I/O 없음. 잡동사니 창고가 되지 않게, 게임 상태 판단이나 전략은 넣지 않는다.
 - `agent/strategy.py` — `decide(world) -> actions`. `World` 객체만 사용하고, API 형식이나
-  네트워크 호출은 절대 쓰지 않는다.
+  네트워크 호출은 절대 쓰지 않는다. 행동은 `world.py`의 `Spawn`·`Move` 등으로 돌려준다.
+- `main.py` — 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다.
+  전략이나 파싱을 넣지 않는다.
+- `starter/` — 운영진 스타터 킷 원본. **고치지 않는다.** 참고와 비교 테스트용이다.
+- 제출 ZIP은 `scripts/build_submission.py`로만 만든다.
 
 ## 파일 담당
 

@@ -28,3 +28,5 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# 스타터 킷은 원본 그대로 두므로 린트하지 않는다
+extend-exclude = ["starter"]

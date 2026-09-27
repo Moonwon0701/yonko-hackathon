@@ -149,25 +149,26 @@ END
 - 정렬: UNITS는 (팀 Y→K, 병종 F→W→S, y, x), BUILDINGS는 id 오름차순.
 - 우리/상대 구분: INIT의 `TEAM` 줄. RESOURCE는 (내, 상대) 순서.
 
-입력 → `World` 이름 (**제안**, world.py 담당 문원이 확정):
+입력 → `World` 이름 (`agent/world.py`에 구현됨, 2026-09-27):
 
-| 입력 | 타입 | 의미 | `World`에서의 이름(제안) | 쓰는 사람 |
+| 입력 | 타입 | 의미 | `World`에서의 이름 | 쓰는 사람 |
 | --- | --- | --- | --- | --- |
-| `INIT w h` | int, int | 맵 크기 (항상 15×15) | `width`, `height` | 전원 |
+| `INIT w h` | int, int | 맵 크기 (항상 15×15) | `map.width`, `map.height` | 전원 |
 | `TEAM` | `Y`/`K` | 우리 진영 | `me` | 전원 |
-| `MAP` 15줄 | 문자 격자 | 지형 (경기 중 불변) | `grid` / `passable(x, y)` | 성혁 |
-| INIT `BUILDINGS` | id, x, y, 종류 | 건물 고정 정보 | `buildings[id].pos`, `.kind` | 전원 |
-| `BASE Y/K` | x, y | 양 본진 위치 | `base[me]`, `base[enemy]` | 전원 |
+| `MAP` 15줄 | 문자 격자 | 지형 (경기 중 불변) | `map.rows[y][x]` / `map.passable(pos)` | 성혁 |
+| INIT `BUILDINGS` | id, x, y, 종류 | 건물 고정 정보 | (매 턴 블록에 다시 오므로 버림) | – |
+| `BASE Y/K` | x, y | 양 본진 위치 | `map.bases[team]` | 전원 |
 | `TURN n` | int | 현재 턴 | `turn` | 현진 |
 | `RESOURCE a b` | int, int | 내·상대 자원 | `gold[me]`, `gold[enemy]` | 현진 |
-| `UNITS` 줄 | 팀, 병종, x, y, 수 | 셀별 인원 | `units[(team, kind, x, y)] = n` | 전원 |
-| 턴 `BUILDINGS` 소유 | `N`/`Y`/`K` | 소유자 | `buildings[id].owner` | 현진 |
+| `UNITS` 줄 | 팀, 병종, x, y, 수 | 셀별 인원 | `units[(team, kind, (x, y))] = n`, `units_of(team, kind)` | 전원 |
+| 턴 `BUILDINGS` | id, x, y, 종류 | 건물 | `buildings[id].pos`, `.kind` | 전원 |
+| 턴 `BUILDINGS` 소유 | `N`/`Y`/`K` | 소유자 | `buildings[id].owner` (중립은 `None`) | 현진 |
 | 턴 `BUILDINGS` 단계 | 0/1/2 | 점령 단계 | `buildings[id].just_neutralized` (단계 1) | 현진 |
 | 턴 `BUILDINGS` 점수 | int, -1=모름 | 건물 점수 | `buildings[id].score: int \| None` | 현진 |
 
 입력에 없어서 **우리가 직접 추적해야 하는 것**:
 
-- 대칭 짝 id (`(x, y)` ↔ `(14-x, 14-y)`)와 짝 점수 추론
+- 대칭 짝 id (`map.mirror(pos)`)와 짝 점수 추론
 - 우리·상대가 이미 받은 보급소 보너스 (팀별·건물별 1회)
 - 이번 턴 TELE 사용 여부 (출력 쪽에서 관리)
 

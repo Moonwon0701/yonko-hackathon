@@ -38,6 +38,26 @@ python -m sim map --seed 3
 `git:`을 쓰면 브랜치를 바꾸지 않고 "개선 전 vs 개선 후"를 비교할 수 있다. 커밋 안 한 변경은 `.`에만
 반영된다.
 
+### 서버 맵으로 돌리기
+
+대회 페이지에서 받은 모의 전투 리플레이(JSON)는 `data/server-replays/`에 둔다(날짜_상대_회차 폴더, 파일 이름은
+받은 그대로, 내용이 똑같은 중복 파일은 빼고). 리플레이에서 서버의 실제 지형·건물·본진과 **공개된 실제 점수**를
+뽑아 시뮬레이터 맵으로 쓴다(`sim/mapgen.py`의 `from_server_replay`, `load_server_maps`).
+
+```powershell
+# 서버 맵 10개(같은 지형의 리플레이는 하나로 묶음) × 진영 교대 = 20경기
+python -m sim arena . git:main --maps data/server-replays
+
+# 리플레이 한 파일의 맵에서 한 판
+python -m sim match . starter:example_lv2 --map-file "data/server-replays/2026-09-27_high_01/replay.json" --open
+```
+
+- 모의 전투는 상대 봇이 달라도 같은 맵을 다시 쓴다(9/27: 중·상 봇 19경기 = 고유 맵 10개). 같은 지형의
+  리플레이에서 공개된 점수를 합치고, 그래도 모르는 점수는 대칭 짝 → 규칙 범위에서 시드로 채운다
+- 본진은 리플레이 주인(`side`)의 유닛이 처음 나타난 칸에 가까운 `H`가 그 진영이다
+- 새 리플레이를 받으면 같은 폴더 규칙으로 넣기만 하면 된다. `tests/test_sim_server_maps.py`가 맵 수와 규칙
+  조건을 확인하므로, 맵이 늘면 그 테스트의 맵 개수를 고친다
+
 ### arena 결과 읽기
 
 ```

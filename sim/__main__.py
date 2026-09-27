@@ -26,6 +26,8 @@ def _time_scale(args) -> float | None:
 
 
 def _load_map(args) -> mapgen.MapSpec:
+    if args.map_file and args.map_file.endswith(".json"):
+        return mapgen.from_server_replay(args.map_file, seed=args.seed)
     if args.map_file:
         return mapgen.from_init(Path(args.map_file).read_text(encoding="utf-8"), seed=args.seed)
     return mapgen.generate(args.seed)
@@ -58,7 +60,10 @@ def cmd_match(args) -> None:
 
 def cmd_arena(args) -> None:
     a, b = bots.resolve(args.a), bots.resolve(args.b)
-    seeds = list(range(args.seed, args.seed + args.seeds))
+    if args.maps:
+        seeds = mapgen.load_server_maps(args.maps, seed=args.seed)  # (이름, 맵) 목록
+    else:
+        seeds = list(range(args.seed, args.seed + args.seeds))
     out = Path(args.out) if args.out else RUNS / f"arena-{time.strftime('%m%d-%H%M%S')}"
     start = time.perf_counter()
 
@@ -89,7 +94,7 @@ def main(argv: list[str] | None = None) -> None:
 
     def common(sp):
         sp.add_argument("--seed", type=int, default=0, help="맵 시드 (arena는 시작 시드)")
-        sp.add_argument("--map-file", help="서버에서 받은 INIT 블록 텍스트로 맵 지정")
+        sp.add_argument("--map-file", help="서버 맵: INIT 블록 텍스트 또는 대회 페이지 리플레이(.json)")
         sp.add_argument("--time-scale", type=float, default=1.0,
                         help="시간 제한 배율 (기본 1.0 = 3초/300ms)")
         sp.add_argument("--no-timeout", action="store_true", help="시간 제한 끄기 (디버깅용)")
@@ -108,6 +113,7 @@ def main(argv: list[str] | None = None) -> None:
     a.add_argument("a", help="평가할 봇 (A)")
     a.add_argument("b", help="상대 봇 (B)")
     a.add_argument("--seeds", type=int, default=20, help="맵 개수 (경기 수는 2배)")
+    a.add_argument("--maps", help="서버 리플레이 폴더: 시드 맵 대신 그 안의 서버 맵(같은 지형은 하나로)으로 대전")
     a.add_argument("--jobs", type=int, default=arena.default_jobs(), help="동시 경기 수")
     a.add_argument("--save", choices=("none", "losses", "all"), default="losses",
                    help="리플레이 저장: A가 이기지 못한 경기만(기본)/전부/안 함")

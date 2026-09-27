@@ -179,3 +179,23 @@ def test_skips_hospital_that_enemy_warriors_can_reach():
               units={("K", "W", (10, 8)): 2}, gold=10)
     spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
     assert spawns and all(a.at is None for a in spawns)
+
+
+def test_distance_map_links_stations_with_cost_one():
+    gates = ((1, 1), (13, 13))
+    dist = distance_map([(13, 12)], EMPTY.passable, gates)
+    assert dist[(13, 13)] == 1 and dist[(1, 1)] == 2  # 역에서 역으로 한 턴
+    assert dist[(1, 0)] == 3
+    assert distance_map([(13, 12)], EMPTY.passable) == distance_map([(13, 12)], EMPTY.passable, ())
+    assert step_along((1, 1), dist, portals=gates) == (13, 13)  # 붙어 있지 않은 칸 = 순간이동
+    assert step_along((1, 1), dist) is None or step_along((1, 1), dist) != (13, 13)
+
+
+def test_warriors_teleport_to_far_front_at_most_five():
+    from agent.world import Tele
+    w = world([building(0, (1, 1), "STATION", owner="Y", score=1),
+               building(1, (13, 13), "STATION", owner="Y", score=1)],
+              units={("Y", "W", (1, 1)): 7, ("K", "F", (13, 11)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert Tele((1, 1), "W", 5, (13, 13)) in actions
+    assert [a for a in actions if isinstance(a, Move) and a.src == (1, 1) and a.count == 2]  # 나머지 2명은 걸어간다

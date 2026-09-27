@@ -42,6 +42,7 @@ from agent.world import (
     LIBRARY_DISCOUNT,
     MIN_CAPTURE_COST,
     PLAZA_CAPTURE_COST,
+    TELE_MAX_UNITS,
     TOTAL_TURNS,
     UNIT_COST,
     Action,
@@ -50,6 +51,7 @@ from agent.world import (
     Pos,
     Priority,
     Spawn,
+    Tele,
     World,
 )
 
@@ -99,6 +101,7 @@ _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건
 
 _depots_taken: set[int] = set()  # 우리가 소유했던 보급소 id (보너스는 1회뿐). 한 프로세스 = 한 경기
 _dist_cache: dict[Pos, dict[Pos, int]] = {}  # 칸 → 그 칸까지의 거리표. 맵은 경기 내내 같으므로 턴을 넘어 재사용
+_tele_cache: dict[tuple[Pos, tuple[Pos, ...]], dict[Pos, int]] = {}  # (칸, 우리 역들) → 역 포함 거리표
 _dist_cache_rows: list[tuple[str, ...]] = []  # 캐시를 만든 맵의 지형 (맵이 바뀌면 캐시를 비운다)
 
 
@@ -123,6 +126,17 @@ def decide(world: World) -> list[Action]:
         return _dist_cache[pos]
 
     key = normalizer(world)  # 동점일 때의 순서를 자기 본진 기준으로 맞춘다 → 양 진영이 거울처럼 움직인다
+    # 역 순간이동: 우리 역이 2개 이상이면 역끼리 비용 1로 이어진 경로도 최단거리에 넣는다 (전투병 이동에만.
+    # 깃발병에 쓰면 효과가 없었다 — docs/benchmarks.md)
+    stations = sorted((b.pos for b in world.owned(me, "STATION")), key=key)
+    gates = tuple(stations) if len(stations) >= 2 else ()
+
+    def tele_to(pos: Pos) -> dict[Pos, int]:
+        if not gates:
+            return dist_to(pos)
+        if (pos, gates) not in _tele_cache:
+            _tele_cache[(pos, gates)] = distance_map([pos], passable, gates)
+        return _tele_cache[(pos, gates)]
     enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
     enemy_warriors = world.units_of(enemy, "W")
     threat = threat_map(enemy_warriors + enemy_spawnable(world), passable)
@@ -180,13 +194,30 @@ def decide(world: World) -> list[Action]:
     moving: Counter[tuple[Pos, Pos | None]] = Counter()  # (출발 칸, 목표 칸 또는 None=공통 목표) → 인원
     moving.update(w_plan)
     moving.update((pos, None) for pos in leftover)
+    goal_tele = distance_map(goals, passable, gates) if gates else goal_dist
     w_after: Counter[Pos] = Counter()
     w_steps: Counter[tuple[Pos, Pos]] = Counter()
+    w_jumps: Counter[tuple[Pos, Pos]] = Counter()  # 순간이동을 원하는 (출발 역, 도착 역) → 인원
+    walk_of: dict[tuple[Pos, Pos], Pos | None] = {}  # 순간이동을 못 하면 대신 걸을 칸
     for (pos, goal), n in moving.items():
-        step = step_along(pos, goal_dist if goal is None else dist_to(goal), order)
+        step = step_along(pos, goal_tele if goal is None else tele_to(goal), order, gates)
+        if step and manhattan(pos, step) > 1:
+            w_jumps[(pos, step)] += n
+            walk_of[(pos, step)] = step_along(pos, goal_dist if goal is None else dist_to(goal), order)
+            continue
         w_after[step or pos] += n
         if step:
             w_steps[(pos, step)] += n
+    jump = pick_jump(w_jumps, key)
+    for (src, dst), n in w_jumps.items():
+        sent = min(n, TELE_MAX_UNITS) if (src, dst) == jump else 0
+        if sent:
+            actions.append(Tele(src, "W", sent, dst))
+            w_after[dst] += sent
+        walk = walk_of[(src, dst)]
+        w_after[walk or src] += n - sent
+        if walk and n - sent:
+            w_steps[(src, walk)] += n - sent
     actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
 
     # 4) 깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 안전한 칸으로만 이동한다.
@@ -221,6 +252,7 @@ def remember(world: World) -> None:
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
     if _dist_cache_rows != [world.map.rows]:
         _dist_cache.clear()
+        _tele_cache.clear()
         _dist_cache_rows[:] = [world.map.rows]
 
 
@@ -430,6 +462,13 @@ def assign_warriors(
         arrival[task.pos] = chosen[-1][0]
         remaining.remove(task)
     return plan, pool, arrival
+
+
+def pick_jump(jumps: Counter[tuple[Pos, Pos]], key: Callable[[Pos], Pos]) -> tuple[Pos, Pos] | None:
+    """순간이동은 턴당 1회: 인원이 가장 많은 (출발 역, 도착 역) 하나. 동점이면 정규화 좌표 순."""
+    if not jumps:
+        return None
+    return min(jumps, key=lambda pair: (-min(jumps[pair], TELE_MAX_UNITS), key(pair[0]), key(pair[1])))
 
 
 def spawn_site(sites: list[Pos], goal_dist: dict[Pos, int], threat: dict[Pos, int]) -> Pos:

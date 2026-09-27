@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -19,7 +20,11 @@ from sim.bots import BotSpec
 
 def _play_one(task: tuple) -> dict:
     seed, a_team, bots, time_scale, save_dir, save_mode = task
-    spec = mapgen.generate(seed)
+    # seed는 시드(int) 또는 (이름, 맵) — 서버 리플레이에서 뽑은 맵은 이름으로 기록한다
+    if isinstance(seed, tuple):
+        seed, spec = seed
+    else:
+        spec = mapgen.generate(seed)
     replay = match.play(spec, bots, time_scale=time_scale, record=save_mode != "none")
     res = replay["result"]
     b_team = "K" if a_team == "Y" else "Y"
@@ -38,13 +43,14 @@ def _play_one(task: tuple) -> dict:
         row["ignored"] = {"A": res["ignored_commands"][a_team], "B": res["ignored_commands"][b_team]}
     if save_mode == "all" or (save_mode == "losses" and outcome != "win"):
         replay["view"] = a_team  # 평가 대상(A, 보통 우리 봇)이 아는 정보만 보이게 연다
-        path = Path(save_dir) / f"seed{seed:04d}-A_is_{a_team}-{outcome}.html"
+        label = f"seed{seed:04d}" if isinstance(seed, int) else re.sub(r"[^\w.-]+", "_", str(seed))
+        path = Path(save_dir) / f"{label}-A_is_{a_team}-{outcome}.html"
         viewer.write_html(replay, path)
         row["replay"] = str(path)
     return row
 
 
-def run(a: BotSpec, b: BotSpec, seeds: list[int], *, jobs: int, time_scale: float | None,
+def run(a: BotSpec, b: BotSpec, seeds: list, *, jobs: int, time_scale: float | None,
         save_dir: Path, save_mode: str = "losses", progress=None) -> list[dict]:
     tasks = []
     for seed in seeds:
@@ -58,7 +64,7 @@ def run(a: BotSpec, b: BotSpec, seeds: list[int], *, jobs: int, time_scale: floa
             rows.append(fut.result())
             if progress:
                 progress(len(rows), len(tasks))
-    rows.sort(key=lambda r: (r["seed"], r["a_team"]))
+    rows.sort(key=lambda r: (str(r["seed"]), r["a_team"]))
     save_dir.mkdir(parents=True, exist_ok=True)
     with open(save_dir / "results.jsonl", "w", encoding="utf-8") as f:
         f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
@@ -87,7 +93,7 @@ def summarize(rows: list[dict], a_name: str, b_name: str) -> str:
     lines = [
         f"A = {a_name}",
         f"B = {b_name}",
-        f"{n}경기 (시드 {n // 2}개 × 진영 교대)",
+        f"{n}경기 (맵 {n // 2}개 × 진영 교대)",
         (f"A 기준  승 {c['win']} · 무 {c['draw']} · 패 {c['loss']}   "
          f"승점률 {rate:.1%} (95% 구간 {lo:.0%}–{hi:.0%})"),
     ]

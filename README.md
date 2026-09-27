@@ -87,7 +87,20 @@ Windows는 `bin`이 아니라 **`Scripts`** 입니다. macOS·Linux에서는 `py
 적은 뒤** PR로 올립니다. 그래야 나머지 두 명이 `git pull` 후 `pip install -e ".[dev]"` 한 번으로
 같은 환경이 됩니다.
 
-TODO: 게임 규칙과 API가 공개되면 실행 명령(`python -m agent` 등)을 여기에 적는다.
+## 봇 실행과 제출
+
+```powershell
+pytest                                  # 테스트 (스타터 예제와 같은 명령을 내는지 포함)
+ruff check .                            # 린트
+python scripts/build_submission.py      # 제출 ZIP 만들기 + 풀어서 160턴 스모크 테스트
+```
+
+결과는 `dist/bot-<커밋 해시>.zip`입니다. 커밋 안 된 변경이 섞여 있으면 이름에 `-dirty`가
+붙으니, 제출용은 커밋한 뒤에 만드세요. 만든 ZIP을 대회 페이지에 올리고 **검사 통과 확인 →
+코드 선택**까지 해야 반영됩니다.
+
+ZIP은 손으로 만들지 마세요. PowerShell 5.1의 `Compress-Archive`는 경로를 역슬래시로 저장하고,
+Git Bash의 `tar`는 ZIP이 아니라 tar 파일을 만듭니다. 둘 다 서버 검사에서 떨어질 수 있습니다.
 
 ## 매일 작업 순서
 
@@ -102,5 +115,5 @@ TODO: 게임 규칙과 API가 공개되면 실행 명령(`python -m agent` 등)�
 - [claude-code-setup.md](claude-code-setup.md) — Claude Code 설치, CLI/GUI 차이, GitHub 연결.
   **해커톤 시작 전에 먼저 읽으세요.**
 - [onboarding.md](onboarding.md) — GitHub 협업 방식, 행동 트리, 강화학습 배경 설명.
-- [docs/game-api.md](docs/game-api.md) — 게임 규칙·API 인테이크 양식. **규칙이 공개되면 제일
-  먼저 이걸 채웁니다.**
+- [docs/game-api.md](docs/game-api.md) — 게임 규칙을 설계용으로 정리한 문서. 원문은
+  [docs/rules-original.md](docs/rules-original.md).

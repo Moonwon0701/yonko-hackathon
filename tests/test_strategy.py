@@ -50,3 +50,58 @@ def test_priority_orders_simultaneous_captures_by_value():
     w = world([building(0, (3, 3), "LIBRARY", score=1), building(1, (5, 5), "WATCH", score=4)],
               units={("Y", "F", (3, 3)): 1, ("Y", "F", (5, 5)): 1}, gold=0)
     assert Priority(((5, 5), (3, 3))) in strategy.decide(w)
+
+
+# ------------------------------------------------------------------ M2
+
+
+def test_threat_map_adds_up_stacks_that_can_meet():
+    from agent.algorithms import threat_map
+    threat = threat_map([((3, 3), 2), ((5, 3), 1)], EMPTY.passable)
+    assert threat[(4, 3)] == 3  # 두 무리 모두 한 칸이면 닿는다
+    assert threat[(3, 3)] == 2 and threat[(3, 4)] == 2
+    assert (7, 3) not in threat
+
+
+def test_flag_waits_instead_of_walking_into_enemy_warrior():
+    w = world([building(0, (5, 5))], units={("Y", "F", (4, 5)): 1, ("K", "W", (6, 5)): 1}, gold=0)
+    assert not [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "F"]
+
+
+def test_flag_pull_sends_warrior_and_flag_together():
+    w = world([building(0, (5, 5), owner="K")],
+              units={("Y", "F", (4, 5)): 1, ("Y", "W", (5, 6)): 1, ("K", "F", (5, 5)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert Move((5, 6), "W", 1, (5, 5)) in actions
+    assert Move((4, 5), "F", 1, (5, 5)) in actions
+
+
+def test_flag_holds_until_warrior_arrives_for_pull():
+    w = world([building(0, (5, 5), owner="K")],
+              units={("Y", "F", (4, 5)): 1, ("Y", "W", (5, 8)): 1, ("K", "F", (5, 5)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert Move((5, 8), "W", 1, (5, 7)) in actions
+    assert not [a for a in actions if isinstance(a, Move) and a.kind == "F"]
+
+
+def test_self_play_is_mirror_symmetric():
+    """같은 봇끼리 두면 매 턴 두 진영의 명령이 점대칭이어야 한다 (동점 처리가 진영에 따라 다르면 깨진다)."""
+    from sim import bots, mapgen, match
+
+    def mirror(line):
+        t = line.split()
+        flip = {"U": "D", "D": "U", "L": "R", "R": "L"}
+        if t[0] == "MOVE":
+            return f"MOVE {14 - int(t[1])} {14 - int(t[2])} {t[3]} {t[4]} {flip[t[5]]}"
+        if t[0] == "PRIORITY":
+            xy = [14 - int(v) for v in t[1:]]
+            return " ".join(["PRIORITY", *map(str, xy)])
+        return line
+
+    me = bots.resolve(".")
+    for seed in (0, 2, 25):  # 동점 처리 버그로 대칭이 깨졌던 맵들
+        rep = match.play(mapgen.generate(seed), {"Y": me, "K": me}, time_scale=None)
+        for entry in rep["turns"]:
+            y = sorted(c["line"] for c in entry["commands"].get("Y", []))
+            k = sorted(mirror(c["line"]) for c in entry["commands"].get("K", []))
+            assert y == k, (seed, entry["turn"])

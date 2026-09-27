@@ -32,7 +32,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from agent.algorithms import DEFAULT_ORDER, distance_map, first_step, step_along, threat_map
+from agent.algorithms import DEFAULT_ORDER, distance_map, step_along, threat_map
 from agent.world import (
     BASE_INCOME,
     CAPTURE_COST,
@@ -98,6 +98,8 @@ ATTACK_MARGIN = 2  # 공격: 우리 전투병이 적보다 이만큼 많으면
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
 _depots_taken: set[int] = set()  # 우리가 소유했던 보급소 id (보너스는 1회뿐). 한 프로세스 = 한 경기
+_dist_cache: dict[Pos, dict[Pos, int]] = {}  # 칸 → 그 칸까지의 거리표. 맵은 경기 내내 같으므로 턴을 넘어 재사용
+_dist_cache_rows: list[tuple[str, ...]] = []  # 캐시를 만든 맵의 지형 (맵이 바뀌면 캐시를 비운다)
 
 
 @dataclass(frozen=True)
@@ -115,12 +117,10 @@ def decide(world: World) -> list[Action]:
     actions: list[Action] = []
     order = direction_order(world)
     passable = world.map.passable
-    cache: dict[Pos, dict[Pos, int]] = {}
-
     def dist_to(pos: Pos) -> dict[Pos, int]:
-        if pos not in cache:
-            cache[pos] = distance_map([pos], passable)
-        return cache[pos]
+        if pos not in _dist_cache:
+            _dist_cache[pos] = distance_map([pos], passable)
+        return _dist_cache[pos]
 
     key = normalizer(world)  # 동점일 때의 순서를 자기 본진 기준으로 맞춘다 → 양 진영이 거울처럼 움직인다
     enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
@@ -170,19 +170,20 @@ def decide(world: World) -> list[Action]:
     tasks += guard_tasks(pressured, threat, values, profile)
     tasks.sort(key=lambda t: key(t.pos))
     w_plan, leftover, arrival = assign_warriors(warriors, tasks, dist_to)
+    # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
+    # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
     goals = set(enemy_flags) or {b.pos for b in free_targets}
+    goal_dist = distance_map(goals, passable)
+    moving: Counter[tuple[Pos, Pos | None]] = Counter()  # (출발 칸, 목표 칸 또는 None=공통 목표) → 인원
+    moving.update(w_plan)
+    moving.update((pos, None) for pos in leftover)
     w_after: Counter[Pos] = Counter()
     w_steps: Counter[tuple[Pos, Pos]] = Counter()
-    for pos, goal in w_plan:
-        step = step_along(pos, dist_to(goal), order)
-        w_after[step or pos] += 1
+    for (pos, goal), n in moving.items():
+        step = step_along(pos, goal_dist if goal is None else dist_to(goal), order)
+        w_after[step or pos] += n
         if step:
-            w_steps[(pos, step)] += 1
-    for pos in leftover:
-        step = first_step(pos, goals, passable, order)
-        w_after[step or pos] += 1
-        if step:
-            w_steps[(pos, step)] += 1
+            w_steps[(pos, step)] += n
     actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
 
     # 4) 깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 안전한 칸으로만 이동한다.
@@ -210,11 +211,14 @@ def decide(world: World) -> list[Action]:
 
 
 def remember(world: World) -> None:
-    """턴을 넘어 기억해야 하는 것: 보급소 보너스를 이미 받았는지, 직전 국면."""
+    """턴을 넘어 기억해야 하는 것: 보급소 보너스를 이미 받았는지, 직전 국면, 거리표 캐시."""
     if world.turn <= 1:
         _depots_taken.clear()
         _phase.update(name="EXPAND", calm=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
+    if _dist_cache_rows != [world.map.rows]:
+        _dist_cache.clear()
+        _dist_cache_rows[:] = [world.map.rows]
 
 
 def note() -> str:

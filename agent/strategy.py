@@ -16,13 +16,15 @@ M2 — 위험 판단 + 전투병 과제 + 깃발 뽑기 (docs/roadmap.md)
 - 전투병 수: 적 전투병 + 1 (최소 MIN_WARRIORS)
 
 구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝,
-노드 정의는 agent/bt.py).
-- TURN_TREE(Sequence): 상황 읽기 → PHASE_TREE → 점령 계획 → 생산 → 전투병 이동 → 깃발병 이동 → 우선순위
-- PHASE_TREE(Selector): 아래 국면 가지 중 처음 성립하는 것의 가중치를 쓴다
+노드 정의는 agent/bt.py). 유닛이 하는 일은 모두 과제(Task) 하나로 나타낸다: 점령(깃발병 1명)과
+처치·호위·지키기(전투병 need명).
+- TURN_TREE(Sequence): 상황 읽기 → PHASE_TREE → 깃발병 1차 → 전투병 → 깃발병 2차 → 우선순위
+- PHASE_TREE(Selector): 처음 성립하는 국면 가지가 이번 턴 과제 목록의 구성(과제 종류와 가중치)을 정한다
+- 배정·생산·이동 단계는 국면이 정한 과제 목록만 보고 움직인다(국면별 분기가 트리 밖에 없다)
 - FLAG_TREE(Selector): 깃발병 한 명의 다음 칸 — 안전하게 다가가기 → 대기 → 피하기 → 그래도 다가가기
-- 각 단계가 쓰는 효용 배정기(assign, assign_warriors)는 트리의 행동 잎 안에서 호출하는 부품이다.
+- 효용 배정기(assign_flags, assign_warriors)는 트리의 행동 잎 안에서 호출하는 부품이다.
 
-M3 — 국면 선택 (위층). 국면은 아래층(M1·M2 배정기)이 쓰는 가중치 묶음(Profile)이다.
+M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 방법(과제 종류 + 가중치).
 - Selector: 위협 대응 → 굳히기 → 공격 → 확장. 위에서부터 처음 조건이 성립하는 국면을 고른다.
   - 위협 대응(THREAT): 적 깃발병이 GUARD_RADIUS 안에 들어온 우리 건물의 점수 합 ≥ THREAT_PRESSURE
   - 굳히기(HOLD): LATE_TURN 이후이고 추정 점수가 앞섬
@@ -30,7 +32,7 @@ M3 — 국면 선택 (위층). 국면은 아래층(M1·M2 배정기)이 쓰는 �
   - 확장(EXPAND): 그 밖 (M2까지의 동작)
 - 국면 유지(Latch 노드): 더 급한 국면으로는 바로 바꾸고, 덜 급한 국면으로는 지금 국면의 조건이 HOLD_TURNS턴
   연속 풀렸을 때만 내려간다(국면이 턴마다 흔들리지 않게).
-- 지키기 과제: 적 깃발병이 GUARD_RADIUS 안에 있는 우리 건물에 전투병을 세운다(가치 × Profile.guard).
+- 지키기 과제: 적 깃발병이 GUARD_RADIUS 안에 있는 우리 건물에 전투병을 세운다(가치 × 국면별 배수).
 """
 
 from __future__ import annotations
@@ -80,23 +82,7 @@ KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
 DANGER_DISCOUNT = 0.5  # 적 전투병이 닿는 건물은 깃발병 목표로서 가치를 이만큼 곱한다
 
 
-@dataclass(frozen=True)
-class Profile:
-    """국면 하나 = 아래층 배정기의 가중치 묶음."""
-
-    guard: float  # 우리 건물 지키기 과제의 가치 배수
-    steal: float  # 상대 소유 건물을 깃발병 목표로 볼 때의 가치 배수 (빼앗으면 상대 점수도 준다)
-    danger: float  # 적 전투병이 닿는 건물의 가치 배수 (작을수록 조심한다)
-    extra_warriors: int  # 전투병 목표 인원 = 적 전투병 + 이 값
-
-
-PROFILES = {
-    "THREAT": Profile(guard=2.0, steal=1.0, danger=0.5, extra_warriors=2),
-    "HOLD": Profile(guard=1.5, steal=1.0, danger=0.3, extra_warriors=2),
-    "ATTACK": Profile(guard=0.5, steal=1.5, danger=0.5, extra_warriors=1),
-    "EXPAND": Profile(guard=1.0, steal=1.0, danger=DANGER_DISCOUNT, extra_warriors=1),
-}
-PHASE_ORDER = ("THREAT", "HOLD", "ATTACK", "EXPAND")  # BT Selector의 우선순위
+# 국면별 과제 구성(종류·가중치)은 파일 끝 PHASE_TREE에 가지마다 적는다.
 HOLD_TURNS = 3  # 덜 급한 국면으로 내려가려면 지금 국면의 조건이 이만큼 연속으로 풀려야 한다
 GUARD_RADIUS = 3  # 적 깃발병이 이 거리 안에 있는 우리 건물은 위협받는 것으로 본다
 THREAT_PRESSURE = 2.0  # 위협받는 우리 건물의 추정 점수 합이 이 이상이면 위협 대응
@@ -113,11 +99,18 @@ _dist_cache_rows: list[tuple[str, ...]] = []  # 캐시를 만든 맵의 지형 (
 
 @dataclass(frozen=True)
 class Task:
-    """전투병 과제: `pos`에 `need`명 이상 보내면 `value`만큼 얻는다."""
+    """과제: `unit` 병종을 `pos`에 `need`명 이상 보내면 `value`만큼 얻는다.
 
+    점령 과제는 깃발병 한 명이 맡고, 대상 건물과 남은 점령 단계 수(`stages`)를 함께 적는다.
+    """
+
+    kind: str  # 점령 · 처치 · 호위 · 지키기
+    unit: str  # "F" | "W"
     pos: Pos
     need: int
     value: float
+    building: Building | None = None
+    stages: int = 0
 
 
 # ------------------------------------------------------------------ 한 턴 (루트 Sequence)
@@ -130,6 +123,13 @@ class Turn:
         self.world = world
         self.phase = _phase
         self.actions: list[Action] = []
+        # 국면 가지가 채운다: 병종별 과제 만들기 함수, 전투병 목표 인원의 추가분
+        self.makers: dict[str, list[Maker]] = {"F": [], "W": []}
+        self.extra_warriors = 0
+
+    def tasks(self, unit: str) -> list[Task]:
+        """이번 국면이 켠 과제 만들기 함수로 `unit` 병종의 과제 목록을 만든다."""
+        return [task for maker in self.makers[unit] for task in maker(self)]
 
     def dist_to(self, pos: Pos) -> dict[Pos, int]:
         """걸어서 `pos`까지의 거리표 (경기 내내 캐시)."""
@@ -144,6 +144,9 @@ class Turn:
         if (pos, self.gates) not in _tele_cache:
             _tele_cache[(pos, self.gates)] = distance_map([pos], self.world.map.passable, self.gates)
         return _tele_cache[(pos, self.gates)]
+
+
+Maker = Callable[[Turn], list[Task]]  # 과제 만들기 함수: 칠판을 읽고 과제 목록을 돌려준다
 
 
 def decide(world: World) -> list[Action]:
@@ -168,7 +171,6 @@ def read_situation(t: Turn) -> None:
     t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
     t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
     t.others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
-    t.dists = {b.id: t.dist_to(b.pos) for b in t.others}
     # 상대 깃발병이 있는 건물은 경합이라, 전투병이 뽑아 주기 전에는 깃발병 목표가 아니다
     t.free_targets = [b for b in t.others if b.pos not in t.enemy_flags]
     t.pressured = pressured_buildings(world, t.enemy_flags, t.dist_to)
@@ -176,25 +178,38 @@ def read_situation(t: Turn) -> None:
 
 
 def enter_phase(t: Turn, name: str) -> None:
-    """국면 가지의 행동 잎: 이번 턴 아래층이 쓸 가중치(Profile)를 정한다."""
+    """국면 가지의 첫 행동 잎: 지금 국면을 기록한다(다음 턴 Latch가 읽는다)."""
     if t.phase["name"] != name:
         t.phase.update(name=name, calm=0)
-    t.profile = PROFILES[name]
 
 
-def plan_captures(t: Turn) -> None:
-    """지금 있는 깃발병으로 이번 턴 점령할 건물을 정하고, 그 비용만 남긴다."""
+def plan_flags(t: Turn) -> None:
+    """깃발병 1차: 지금 있는 깃발병을 점령 과제에 배정해, 이번 턴 점령 단계가 진행될 건물을 정한다."""
+    t.flags = sorted(t.world.units_of(t.world.me, "F"), key=lambda u: t.key(u[0]))
+    t.targets, t.pulled = t.free_targets, set()
+    t.f_tasks = t.tasks("F")
+    t.capturing_now = capturing(assign_flags(t.flags, t.f_tasks, t.dist_to), t.dist_to)
+
+
+def reserve_capture_cost(t: Turn) -> None:
+    """이번 턴 점령 비용만 남기고 나머지를 생산 예산으로."""
     world, me = t.world, t.world.me
-    t.flags = sorted(world.units_of(me, "F"), key=lambda u: t.key(u[0]))
-    plan = assign(t.flags, t.free_targets, t.dists, t.values, t.threat, profile=t.profile)
-    t.capturing_now = capturing(plan, t.dists)
-    need = sum(world.stage_cost(b) for b in t.capturing_now)
+    need = sum(world.stage_cost(task.building) for task in t.capturing_now)
     income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
     t.budget = max(0, world.gold[me] - max(0, need - income))  # 점령은 이번 턴 수입 뒤에 치른다
 
 
+def plan_warrior_tasks(t: Turn) -> None:
+    """전투병 과제 목록(이번 국면이 켠 종류)과, 과제가 없는 전투병의 공통 목표."""
+    t.w_tasks = sorted(t.tasks("W"), key=lambda task: t.key(task.pos))
+    # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
+    # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
+    t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
+    t.goal_dist = distance_map(t.goals, t.world.map.passable)
+
+
 def produce(t: Turn) -> None:
-    """생산: 깃발병(MIN_FLAGS까지) → 전투병(적 + 추가 인원까지) → 깃발병(목표 수만큼) → 남으면 전투병.
+    """생산: 깃발병(MIN_FLAGS까지) → 전투병(적 + 추가 인원까지) → 깃발병(점령 과제 수만큼) → 남으면 전투병.
     위치는 M4 병원 생산."""
     world, me, key = t.world, t.world.me, t.key
     budget = t.budget
@@ -202,8 +217,8 @@ def produce(t: Turn) -> None:
     fc = UNIT_COST["F"]
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
-    want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.profile.extra_warriors)
-    want_f = max(0, len(t.free_targets) + SPARE_FLAGS - nf)
+    want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
+    want_f = max(0, len(t.f_tasks) + SPARE_FLAGS - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -219,31 +234,27 @@ def produce(t: Turn) -> None:
     t.make_w, t.make_f = make_w, make_f
     # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
     passable = world.map.passable
-    tasks = warrior_tasks(world, t.enemy_flags, t.threat, t.values, t.capturing_now)
-    tasks += guard_tasks(t.pressured, t.threat, t.values, t.profile)
-    tasks.sort(key=lambda task: key(task.pos))
-    t.tasks = tasks
-    # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
-    # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
-    t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
-    t.goal_dist = distance_map(t.goals, passable)
     sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
-    t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in tasks}, passable), t.threat)
-    t.f_site = spawn_site(sites, distance_map({b.pos for b in t.free_targets}, passable), t.threat)
+    t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in t.w_tasks}, passable), t.threat)
+    t.f_site = spawn_site(sites, distance_map({task.pos for task in t.f_tasks}, passable), t.threat)
     if make_w:
         t.actions.append(Spawn("W", make_w, None if t.w_site == sites[0] else t.w_site))
     if make_f:
         t.actions.append(Spawn("F", make_f, None if t.f_site == sites[0] else t.f_site))
 
 
+def plan_warriors(t: Turn) -> None:
+    """전투병 배정: 과제마다 가장 가까운 전투병을 붙인다(이번 턴 새로 만든 전투병 포함)."""
+    warriors = with_spawned(t.world.units_of(t.world.me, "W"), t.w_site, t.make_w, t.key)
+    t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to)
+
+
 def move_warriors(t: Turn) -> None:
-    """전투병: 과제 배정 → 이동(역 순간이동 포함). 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다."""
+    """전투병 이동(역 순간이동 포함). 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다."""
     world, key, order, gates = t.world, t.key, t.order, t.gates
-    warriors = with_spawned(world.units_of(world.me, "W"), t.w_site, t.make_w, key)
-    w_plan, leftover, t.arrival = assign_warriors(warriors, t.tasks, t.dist_to)
     moving: Counter[tuple[Pos, Pos | None]] = Counter()  # (출발 칸, 목표 칸 또는 None=공통 목표) → 인원
-    moving.update(w_plan)
-    moving.update((pos, None) for pos in leftover)
+    moving.update(t.w_plan)
+    moving.update((pos, None) for pos in t.w_idle)
     goal_tele = distance_map(t.goals, world.map.passable, gates) if gates else t.goal_dist
     w_after: Counter[Pos] = Counter()
     w_steps: Counter[tuple[Pos, Pos]] = Counter()
@@ -285,12 +296,16 @@ def move_warriors(t: Turn) -> None:
     t.w_after = w_after
 
 
-def move_flags(t: Turn) -> None:
-    """깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 한 명씩 FLAG_TREE로 다음 칸을 정한다."""
-    pulled = {b.id for b in t.others if b.pos in t.enemy_flags and b.pos in t.arrival}
-    targets = t.free_targets + [b for b in t.others if b.id in pulled]
+def replan_flags(t: Turn) -> None:
+    """깃발병 2차: 전투병이 깃발을 뽑아 줄 건물을 점령 과제에 넣고, 새로 만든 깃발병까지 다시 배정한다."""
+    t.pulled = {b.id for b in t.others if b.pos in t.enemy_flags and b.pos in t.arrival}
+    t.targets = t.free_targets + [b for b in t.others if b.id in t.pulled]
     flags = with_spawned(t.flags, t.f_site, t.make_f, t.key)
-    t.plan = assign(flags, targets, t.dists, t.values, t.threat, pulled, t.profile)
+    t.plan = assign_flags(flags, t.tasks("F"), t.dist_to)
+
+
+def move_flags(t: Turn) -> None:
+    """깃발병 이동: 한 명씩 FLAG_TREE로 다음 칸을 정한다."""
     threat, w_after = t.threat, t.w_after
 
     def safe(pos: Pos) -> bool:
@@ -298,9 +313,10 @@ def move_flags(t: Turn) -> None:
         return threat.get(pos, 0) <= w_after[pos]
 
     f_steps: Counter[tuple[Pos, Pos]] = Counter()
-    for pos, b in t.plan:
-        hold = b.id in pulled and t.arrival[b.pos] > 1  # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
-        step = flag_step(pos, b.pos, t.dists[b.id], t.order, safe, hold)
+    for pos, task in t.plan:
+        # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
+        hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold)
         if step:
             f_steps[(pos, step)] += 1
     t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
@@ -308,9 +324,9 @@ def move_flags(t: Turn) -> None:
 
 def set_priority(t: Turn) -> None:
     """이번 턴 점령할 건물이 둘 이상이면 가치 순으로 PRIORITY."""
-    now = sorted(capturing(t.plan, t.dists), key=lambda b: -t.values[b.id])
+    now = sorted(capturing(t.plan, t.dist_to), key=lambda task: -t.values[task.building.id])
     if len(now) >= 2:
-        t.actions.append(Priority(tuple(b.pos for b in now)))
+        t.actions.append(Priority(tuple(task.pos for task in now)))
 
 
 def remember(world: World) -> None:
@@ -368,57 +384,86 @@ def select_phase(active: dict[str, bool], current: str, calm: int) -> tuple[str,
     조건이 성립하는 국면 중 우선순위가 가장 높은 것을 고른다. 그것이 지금 국면보다 급하거나 같으면
     바로 따르고, 덜 급하면 지금 국면의 조건이 HOLD_TURNS턴 연속 풀렸을 때만 내려간다(Latch).
     """
-    ctx = SimpleNamespace(active=active, phase={"name": current, "calm": calm})
+    ctx = SimpleNamespace(active=active, phase={"name": current, "calm": calm}, makers={"F": [], "W": []})
     PHASE_TREE.tick(ctx)
     return ctx.phase["name"], ctx.phase["calm"]
+
+
+# ------------------------------------------------------------------ 과제 만들기 (국면 가지가 켠다)
+
+
+def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
+    """점령: 목표 건물마다 깃발병 한 명. 상대 소유 건물은 가치 × steal(빼앗으면 상대 점수도 준다), 적 전투병이
+    닿는 건물은 × danger(작을수록 조심한다. 전투병이 깃발을 뽑아 줄 건물은 빼고).
+    남은 점령 단계: 뽑아 줄 건물·중립은 1, 상대 건물은 중립화 → 점령 2 (목표에 우리 건물은 없다).
+    """
+    tasks = []
+    for b in t.targets:
+        pulled = b.id in t.pulled
+        value = (t.values[b.id]
+                 * (danger if t.threat.get(b.pos, 0) and not pulled else 1.0)
+                 * (steal if b.owner is not None else 1.0))
+        tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
+    return tasks
+
+
+def kill_tasks(t: Turn) -> list[Task]:
+    """처치: 적 깃발병. 이기려면 그 칸에 모일 수 있는 적 전투병보다 한 명 많아야 한다.
+    건물 위면 그 건물 가치를 더한다: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기."""
+    tasks = []
+    for pos, n in t.enemy_flags.items():
+        b = t.world.building_at(pos)
+        bonus = t.values[b.id] if b else 0.0
+        tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
+    return tasks
+
+
+def escort_tasks(t: Turn) -> list[Task]:
+    """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다."""
+    tasks = []
+    for c in t.capturing_now:
+        b = c.building
+        if t.threat.get(b.pos, 0) and b.pos not in t.enemy_flags:
+            tasks.append(Task("호위", "W", b.pos, t.threat[b.pos], t.values[b.id]))
+    return tasks
+
+
+def guard_tasks(t: Turn, weight: float) -> list[Task]:
+    """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다(가치 × weight). 올라오는 적 깃발병을
+    그 칸에서 잡는다."""
+    return [Task("지키기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight) for b, _ in t.pressured]
 
 
 # ------------------------------------------------------------------ 깃발병
 
 
-def assign(
-    flags: list[tuple[Pos, int]],
-    targets: list[Building],
-    dists: dict[int, dict[Pos, int]],
-    values: dict[int, float],
-    threat: dict[Pos, int] | None = None,
-    pulled: set[int] = frozenset(),
-    profile: Profile = PROFILES["EXPAND"],
-) -> list[tuple[Pos, Building]]:
-    """깃발병 한 명씩 (칸, 목표 건물) 짝. 효용이 큰 짝부터 탐욕적으로 고르고, 한 건물엔 한 명.
-
-    목표가 다 차면 남는 인원은 효용이 가장 높은 건물로 겹쳐 보낸다. 닿을 수 없으면 제자리.
-    적 전투병이 닿는 건물은 가치를 깎고(× profile.danger), 상대 소유 건물은 가치를 곱한다(× profile.steal).
-    전투병이 깃발을 뽑아 줄 건물(`pulled`)은 한 단계로 끝난다.
+def assign_flags(
+    flags: list[tuple[Pos, int]], tasks: list[Task], dist_to: Callable[[Pos], dict[Pos, int]],
+) -> list[tuple[Pos, Task]]:
+    """깃발병 한 명씩 (칸, 점령 과제) 짝. 효용 = 가치 / (거리 + 남은 점령 단계 + ETA_OFFSET)이 큰 짝부터
+    탐욕적으로 고르고, 한 과제엔 한 명. 과제가 다 차면 남는 인원은 효용이 가장 높은 과제로 겹쳐 보낸다.
+    닿을 수 없으면 제자리.
     """
-    threat = threat or {}
-    worth = {
-        b.id: values[b.id]
-        * (profile.danger if threat.get(b.pos, 0) and b.id not in pulled else 1.0)
-        * (profile.steal if b.owner is not None else 1.0)
-        for b in targets
-    }
+    dists = {task.pos: dist_to(task.pos) for task in tasks}
     pool = [pos for pos, n in flags for _ in range(n)]
-    free = list(targets)
-    plan: list[tuple[Pos, Building]] = []
+    free = list(tasks)
+    plan: list[tuple[Pos, Task]] = []
     while pool:
-        best: tuple[float, int, Building] | None = None
+        best: tuple[float, int, Task] | None = None
         for i, pos in enumerate(pool):
-            for b in free or targets:
-                d = dists[b.id].get(pos)
+            for task in free or tasks:
+                d = dists[task.pos].get(pos)
                 if d is None:
                     continue
-                # 남은 점령 단계: 뽑아 줄 건물·중립은 1, 상대 건물은 중립화 → 점령 2 (목표에 우리 건물은 없다)
-                steps = 1 if b.id in pulled or b.owner is None else 2
-                u = worth[b.id] / (d + steps + ETA_OFFSET)
+                u = task.value / (d + task.stages + ETA_OFFSET)
                 if best is None or u > best[0]:
-                    best = (u, i, b)
+                    best = (u, i, task)
         if best is None:
             break
-        _, i, b = best
-        plan.append((pool.pop(i), b))
+        _, i, task = best
+        plan.append((pool.pop(i), task))
         if free:
-            free.remove(b)
+            free.remove(task)
     return plan
 
 
@@ -466,44 +511,16 @@ def flag_step(
     return m.step
 
 
-def capturing(plan: list[tuple[Pos, Building]], dists: dict[int, dict[Pos, int]]) -> list[Building]:
-    """이번 턴 이동 뒤 깃발병이 올라가 있을 건물 (= 이번 턴 점령 단계가 진행될 건물)."""
-    found: dict[int, Building] = {}
-    for pos, b in plan:
-        if dists[b.id].get(pos, 99) <= 1:
-            found[b.id] = b
+def capturing(plan: list[tuple[Pos, Task]], dist_to: Callable[[Pos], dict[Pos, int]]) -> list[Task]:
+    """이번 턴 이동 뒤 깃발병이 올라가 있을 점령 과제 (= 이번 턴 점령 단계가 진행될 건물)."""
+    found: dict[Pos, Task] = {}
+    for pos, task in plan:
+        if dist_to(task.pos).get(pos, 99) <= 1:
+            found[task.pos] = task
     return list(found.values())
 
 
 # ------------------------------------------------------------------ 전투병
-
-
-def warrior_tasks(
-    world: World,
-    enemy_flags: dict[Pos, int],
-    threat: dict[Pos, int],
-    values: dict[int, float],
-    capturing_now: list[Building],
-) -> list[Task]:
-    """전투병이 할 일. 이기려면 그 칸에 모일 수 있는 적 전투병보다 한 명 많아야 한다."""
-    tasks = []
-    for pos, n in enemy_flags.items():
-        b = world.building_at(pos)
-        # 건물 위의 적 깃발병: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기
-        bonus = values[b.id] if b else 0.0
-        tasks.append(Task(pos, threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
-    for b in capturing_now:
-        # 점령 중인 우리 깃발병 호위: 같은 수만 있어도 상쇄되어 깃발병이 산다
-        if threat.get(b.pos, 0) and b.pos not in enemy_flags:
-            tasks.append(Task(b.pos, threat[b.pos], values[b.id]))
-    return tasks
-
-
-def guard_tasks(
-    pressured: list[tuple[Building, int]], threat: dict[Pos, int], values: dict[int, float], profile: Profile,
-) -> list[Task]:
-    """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다. 올라오는 적 깃발병을 그 칸에서 잡는다."""
-    return [Task(b.pos, threat.get(b.pos, 0) + 1, values[b.id] * profile.guard) for b, _ in pressured]
 
 
 def assign_warriors(
@@ -645,28 +662,83 @@ def direction_order(world: World) -> tuple[Pos, ...]:
 # 트리 전체를 글로 보려면 tree_text(). 노드 이름이 곧 보고서의 판단 조건 설명이다.
 
 
-def phase_branch(name: str, condition: str) -> Node:
-    """국면 가지: [조건(국면 유지 포함)] → [가중치 적용]."""
+def phase_branch(name: str, condition: str | None, *recipe: Node) -> Node:
+    """국면 가지: [조건(국면 유지 포함)] → [국면 기록] → [이번 턴 과제 구성]. 조건이 없으면 늘 성립(기본 국면)."""
+    record = Act(f"국면 = {name}", lambda ctx: enter_phase(ctx, name))
+    if condition is None:
+        return Sequence(name, record, *recipe)
     test = Condition(condition, lambda ctx: ctx.active[name])
-    return Sequence(name, Latch(name, test, HOLD_TURNS), Act(f"{name} 가중치 적용", lambda ctx: enter_phase(ctx, name)))
+    return Sequence(name, Latch(name, test, HOLD_TURNS), record, *recipe)
+
+
+def enable(name: str, unit: str, maker: Maker) -> Node:
+    """과제 구성 잎: 이번 턴 `unit` 병종의 과제 목록에 `maker`가 만드는 과제를 넣는다."""
+    return Act(name, lambda t: t.makers[unit].append(maker))
+
+
+def capture(steal: float, danger: float) -> Node:
+    return enable(f"점령 과제 (상대 건물 가치 ×{steal:g}, 적 전투병이 닿는 건물 ×{danger:g})",
+                  "F", lambda t: capture_tasks(t, steal, danger))
+
+
+def kill() -> Node:
+    return enable("처치 과제: 적 깃발병 (건물 위면 방어·저지·깃발 뽑기)", "W", kill_tasks)
+
+
+def escort() -> Node:
+    return enable("호위 과제: 점령 중인 우리 깃발병", "W", escort_tasks)
+
+
+def guard(weight: float) -> Node:
+    return enable(f"지키기 과제: 적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물 (가치 ×{weight:g})",
+                  "W", lambda t: guard_tasks(t, weight))
+
+
+def warriors(extra: int) -> Node:
+    return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
 
 PHASE_TREE = Selector(
-    "국면 선택 (위에서부터 처음 성립하는 가지)",
-    phase_branch("THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}"),
-    phase_branch("HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬"),
-    phase_branch("ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐"),
-    Sequence("EXPAND", Act("EXPAND 가중치 적용", lambda ctx: enter_phase(ctx, "EXPAND"))),
+    "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
+    phase_branch(
+        "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), warriors(2),
+    ),
+    phase_branch(
+        "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), warriors(2),
+    ),
+    phase_branch(
+        "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), warriors(1),
+    ),
+    phase_branch(
+        "EXPAND", None,
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), warriors(1),
+    ),
 )
 
 TURN_TREE = Sequence(
     "한 턴",
-    Act("상황 읽기 (위협 맵·건물 가치·목표 후보)", read_situation),
+    Act("상황 읽기 (위협 맵·건물 가치·국면 조건)", read_situation),
     PHASE_TREE,
-    Act("점령 계획 → 점령 비용 예약", plan_captures),
-    Act("생산 (전투병 → 깃발병 → 남으면 전투병, 병원 위치)", produce),
-    Act("전투병 과제 배정·이동 (역 순간이동)", move_warriors),
-    Act("깃발병 재배정 → 한 명씩 깃발병 트리", move_flags),
+    Sequence(
+        "깃발병 1차: 이번 턴 점령할 건물",
+        Act("지금 있는 깃발병을 점령 과제에 배정", plan_flags),
+        Act("점령 비용 예약", reserve_capture_cost),
+    ),
+    Act("전투병 과제 목록", plan_warrior_tasks),
+    Act("생산 (깃발병 최소 인원 → 전투병 목표 인원 → 점령 과제 수만큼 깃발병 → 남으면 전투병, 병원 위치)", produce),
+    Sequence(
+        "전투병",
+        Act("과제 배정 (새로 만든 전투병 포함)", plan_warriors),
+        Act("이동 (역 순간이동)", move_warriors),
+    ),
+    Sequence(
+        "깃발병 2차",
+        Act("전투병이 깃발을 뽑아 줄 건물을 점령 과제에 넣고 재배정", replan_flags),
+        Act("한 명씩 깃발병 트리", move_flags),
+    ),
     Act("동시 점령 우선순위", set_priority),
 )
 

@@ -1,4 +1,6 @@
-"""agent/ 로 옮긴 봇이 스타터 킷 example_lv2와 같은 입력에 같은 명령을 내는지 확인한다."""
+"""우리 adapter·world·algorithms 위에 옮긴 lv2(tests/lv2_port.py)가 스타터 킷 example_lv2와
+같은 입력에 같은 명령을 내는지 확인한다. 전략이 아니라 우리 입출력·경로 탐색이 스타터와 같은지 보는 테스트다.
+"""
 
 import io
 import sys
@@ -8,7 +10,7 @@ import pytest
 from fake_input import random_game
 
 from agent import adapter
-from agent.strategy import decide
+from lv2_port import decide
 
 STARTER = Path(__file__).resolve().parent.parent / "starter"
 sys.path.insert(0, str(STARTER))

@@ -30,6 +30,7 @@ BASE_INCOME = 10
 HALL_BONUS = 2
 TOTAL_TURNS = 160
 TELE_MAX_UNITS = 5
+PLAZA_SCORE = 3  # 중앙광장은 항상 3점
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,15 @@ class World:
             b for b in self.buildings.values()
             if b.owner == team and (kind is None or b.kind == kind)
         ]
+
+    def known_score(self, b: Building) -> int | None:
+        """확실히 아는 점수. 공개된 점수, 공개된 대칭 짝의 점수, 광장(항상 3점) 순. 모르면 None."""
+        if b.score is not None:
+            return b.score
+        if b.kind == "PLAZA":
+            return PLAZA_SCORE
+        twin = self.building_at(self.map.mirror(b.pos))
+        return twin.score if twin else None
 
 
 # ------------------------------------------------------------------ 행동

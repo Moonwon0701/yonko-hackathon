@@ -1,6 +1,8 @@
 # yonko-hackathon
 
-캡처 더 플래그(CTF) 형식 게임을 플레이하는 해커톤용 AI 에이전트입니다.
+2026 연고전 AI 해커톤 「깃발 대항전」(2026-09-27 ~ 10-01)에 제출하는 봇입니다. 15×15 격자에서 두 팀이
+동시에 턴을 두고, 160턴 동안 깃발병으로 건물을 점령해 점수를 겨룹니다. 규칙 정리는
+[docs/game-api.md](docs/game-api.md), 원문은 [docs/rules-original.md](docs/rules-original.md)에 있습니다.
 
 ## 팀원과 담당
 
@@ -10,8 +12,26 @@
 | 성혁 | `agent/algorithms.py` | 경로 탐색 등 순수 알고리즘 함수 |
 | 현진 | `agent/strategy.py` | `decide(world) -> actions` 판단 로직 |
 
-전략은 규칙 기반(BT + 효용 점수)으로 만듭니다. 제출 규정이 학습 가중치를 금지하므로
-신경망·강화학습은 하지 않습니다. 자세한 내용은 [CLAUDE.md](CLAUDE.md)의 "전략 방식" 절을 보세요.
+전략은 규칙 기반입니다. 행동 트리(BT)가 국면을 고르고, 효용 점수가 건물 가치를 매겨 유닛에 목표를
+나눕니다. 운영진 답변(9/27)에 따르면 소스 코드 안에 적은 상수는 학습한 가중치라도 허용되고, 별도 데이터
+파일로 넣는 것만 안 됩니다. 학습을 실제로 적용할지는 아직 팀에서 정하지 않았습니다. 자세한 내용은
+[CLAUDE.md](CLAUDE.md)의 "전략 방식" 절을 보세요.
+
+## 폴더 구조
+
+봇은 한 방향으로만 의존합니다: `adapter.py → world.py → algorithms.py → strategy.py`.
+게임 입출력 형식은 `adapter.py`만 알고, `strategy.py`는 `World` 객체만 봅니다.
+
+| 위치 | 내용 |
+| --- | --- |
+| `main.py` | 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다 |
+| `agent/` | 봇 본체 (위 네 파일). 제출 ZIP에는 `main.py`, `agent/`, `submission.json`만 들어간다 |
+| `sim/` | 로컬 시뮬레이터: 대전(arena), 리플레이 뷰어, 행동 비교(diff) |
+| `scripts/` | 제출 ZIP 만들기, 이긴 경기·진 경기 분석 |
+| `tests/` | `pytest` 테스트 |
+| `starter/`, `devtool/` | 운영진 스타터 킷과 공식 개발도구 원본. **고치지 않는다** |
+| `data/server-replays/` | 대회 페이지에서 받은 서버 경기 리플레이 |
+| `docs/` | 규칙 정리, 로드맵, 성능 기록, LLM 사용 기록 |
 
 ## 시작하는 법
 
@@ -31,8 +51,11 @@ pip install -e ".[dev]"       # agent 패키지 + 개발 도구(pytest, ruff) �
 
 ```powershell
 python -c "import agent; print('ok')"
-pytest                        # 아직 테스트가 없으면 "no tests ran"이 정상
+pytest                        # 784개 통과 + 1개 실패가 현재 정상 (아래 참고)
 ```
+
+실패하는 1개는 `tests/test_official.py::test_devtool_is_unmodified`입니다. `.gitignore`의 `dist/` 줄이
+`devtool/bots/dist/`까지 무시해서 그 파일들이 저장소에 없기 때문이고, 봇 동작과는 관계없습니다.
 
 ### python 대신 py를 쓰는 이유
 
@@ -87,6 +110,27 @@ Windows는 `bin`이 아니라 **`Scripts`** 입니다. macOS·Linux에서는 `py
 적은 뒤** PR로 올립니다. 그래야 나머지 두 명이 `git pull` 후 `pip install -e ".[dev]"` 한 번으로
 같은 환경이 됩니다.
 
+## 로컬에서 대전하기
+
+코드를 고쳤으면 서버에 올리기 전에 로컬 시뮬레이터로 확인합니다. 자세한 사용법은
+[docs/simulator.md](docs/simulator.md)에 있습니다.
+
+```powershell
+python -m sim arena . git:main --seeds 100                 # 지금 코드 vs main, 맵 100개 × 진영 교대 = 200경기
+python -m sim match . starter:example_lv2 --seed 3 --open  # 한 판 두고 리플레이를 브라우저로 열기
+python -m sim diff . git:main --seeds 100                  # 구조만 바꾼 변경이 main과 매 턴 같은 명령을 내는지
+python scripts/analyze_games.py . git:main --seeds 100     # 이긴 경기와 진 경기를 턴별·건물 종류별로 비교
+```
+
+시드 0~9 맵은 서버 모의 전투와 같은 맵입니다(운영진 공식 맵 생성기 사용). `arena` 결과의 승점률 옆 95% 구간이
+50%를 걸치면 아직 차이를 말할 수 없으니 `--seeds`를 늘립니다.
+
+## 지금 봇 상태
+
+- 9/27 서버 모의 전투(M3 버전): 하·중·상 봇 각 10전 10승 → 수료 기준(중 봇 상대 6승 이상) 통과
+- 그 뒤로 병원 생산, 전투병 역 순간이동, 공학관 가치 상향이 들어갔고, 전략 코드를 행동 트리 하나로 정리했다
+- 진행 상황과 다음 계획은 [docs/roadmap.md](docs/roadmap.md), 실험 수치는 [docs/benchmarks.md](docs/benchmarks.md)
+
 ## 봇 실행과 제출
 
 ```powershell
@@ -99,6 +143,9 @@ python scripts/build_submission.py      # 제출 ZIP 만들기 + 풀어서 160�
 붙으니, 제출용은 커밋한 뒤에 만드세요. 만든 ZIP을 대회 페이지에 올리고 **검사 통과 확인 →
 코드 선택**까지 해야 반영됩니다.
 
+마감(서버 시각): 회차 반영은 매일 **08:00·20:00**. 마지막 날(10/1)은 **23:00** 파일 제출,
+**23:59** 최종 선택·보고서 마감입니다.
+
 ZIP은 손으로 만들지 마세요. PowerShell 5.1의 `Compress-Archive`는 경로를 역슬래시로 저장하고,
 Git Bash의 `tar`는 ZIP이 아니라 tar 파일을 만듭니다. 둘 다 서버 검사에서 떨어질 수 있습니다.
 
@@ -110,12 +157,25 @@ Git Bash의 `tar`는 ZIP이 아니라 tar 파일을 만듭니다. 둘 다 서버
 4. `git push -u origin 이름/기능`.
 5. GitHub에서 PR을 만들고 팀원에게 알린다.
 
+## 개발 규칙 요약
+
+전체 규칙은 [CLAUDE.md](CLAUDE.md)에 있습니다. 자주 잊는 것만 모았습니다.
+
+- **턴 계산 시간:** 서버는 로컬보다 약 12배 느립니다. 로컬에서 턴당 계산이 **20 ms**를 넘지 않게 합니다
+  (제한 300 ms, 넘으면 몰수패)
+- **효과가 확인된 것만 넣습니다.** 전략 변경은 `arena`로 200경기 이상 두고, 결과는 넣든 빼든
+  [docs/benchmarks.md](docs/benchmarks.md)에 적습니다
+- **LLM으로 파일을 고치면** 같은 PR에 `docs/llm-log/` 기록 파일을 넣습니다. 보고서 필수 항목입니다
+- 모든 변경은 브랜치 → PR로 `main`에 들어갑니다. 남의 담당 파일이 들어간 PR은 담당자가 확인하고 머지합니다
+
 ## 문서
 
 - [claude-code-setup.md](claude-code-setup.md) — Claude Code 설치, CLI/GUI 차이, GitHub 연결.
   **해커톤 시작 전에 먼저 읽으세요.**
 - [onboarding.md](onboarding.md) — GitHub 협업 방식, 행동 트리, 강화학습 배경 설명.
-  (강화학습은 대회 규정상 쓰지 않기로 했습니다.)
 - [docs/llm-log/](docs/llm-log/) — LLM 사용 기록. 보고서 필수 기재 항목의 원자료.
 - [docs/game-api.md](docs/game-api.md) — 게임 규칙을 설계용으로 정리한 문서. 원문은
   [docs/rules-original.md](docs/rules-original.md).
+- [docs/roadmap.md](docs/roadmap.md) — 전략 개선 로드맵(M0~M5)과 마일스톤별 결과.
+- [docs/benchmarks.md](docs/benchmarks.md) — 로컬 대전·서버 모의 전투·응답 시간 기록.
+- [docs/simulator.md](docs/simulator.md) — 로컬 시뮬레이터 사용법.

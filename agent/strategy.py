@@ -74,7 +74,9 @@ CENTER_KINDS = {"WATCH", "DEPOT"}
 # 기능 가치 (점수 단위)
 HALL_VALUE_PER_TURN = 0.02  # 학생회관: 남은 턴 × 이 값 (초반일수록 크다)
 DEPOT_VALUE = 2.0  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
-FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 0.5, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
+# 공학관: 전투병 값 3 → 2, 같은 자원으로 전투병 1.5배. 진 경기는 전투병(= 생산량) 차이로 벌어지므로
+# 0.5 → 2.0으로 올렸다(main 상대 400경기 약 61% — docs/benchmarks.md)
+FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)

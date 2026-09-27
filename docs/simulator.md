@@ -10,7 +10,7 @@
 
 ## 빠른 사용법
 
-저장소 최상위에서 실행한다. (Windows 콘솔에서 한글이 깨지면 `$env:PYTHONIOENCODING="utf-8"`)
+저장소 최상위에서 실행한다. 가상환경이 켜져 있지 않으면 `python` 대신 `.venv\Scripts\python`을 쓴다.
 
 ```powershell
 # 한 판 두고 리플레이를 브라우저로 열기

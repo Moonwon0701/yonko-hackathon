@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 import webbrowser
@@ -117,8 +118,15 @@ def main(argv: list[str] | None = None) -> None:
     common(mp)
     mp.set_defaults(func=cmd_map)
 
+    # Windows에서 출력이 파이프(Git Bash, VS Code, Claude Code의 ! 명령)로 가면 Python은 cp949로 써서
+    # 한글이 깨진다. 콘솔 창은 인코딩과 상관없이 유니코드로 찍히므로 UTF-8로 통일한다.
+    # PYTHONIOENCODING을 직접 정했으면 그것을 따른다.
+    utf8 = "PYTHONIOENCODING" not in os.environ
     for stream in (sys.stdout, sys.stderr):
-        stream.reconfigure(errors="replace")  # Windows 콘솔(cp949)에서 못 쓰는 문자로 죽지 않게
+        if utf8:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        else:
+            stream.reconfigure(errors="replace")
     args = p.parse_args(argv)
     args.func(args)
 

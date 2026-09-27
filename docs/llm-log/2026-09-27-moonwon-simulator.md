@@ -81,3 +81,12 @@
 - `pytest` 660개 통과, `ruff check .` 통과
 - 헤드리스 Edge로 Y 시점 턴 10을 렌더링해 확인: 공개 점수 `1점`, 대칭 추론 `1점*`, 광장 `3점`, 나머지
   `?점`, K 점수 `2 + ?×1`, K 명령·화살표 숨김
+
+### 이어서: 한글 출력 깨짐 수정
+
+- 문원이 `! /c/yonko-hackathon/.venv/Scripts/python -m sim match . starter:example_lv2 --view Y --open`을
+  실행했을 때 요약 출력의 한글이 깨짐. 별도 요청 문장은 없었고, 실행 결과를 보고 Claude가 고침
+- 원인: Windows에서 출력이 파이프로 가면 Python이 cp949로 쓰는데, 터미널은 UTF-8로 읽음
+- 수정: `sim/__main__.py`가 표준 출력을 UTF-8로 설정(PYTHONIOENCODING을 직접 정했으면 그것을 따름).
+  `docs/simulator.md`의 인코딩 안내를 가상환경 Python 안내로 바꿈
+- 확인: PYTHONIOENCODING 없이 파이프로 실행해 한글이 정상 출력됨, `ruff check sim` 통과

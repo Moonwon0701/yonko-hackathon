@@ -105,3 +105,38 @@ def test_self_play_is_mirror_symmetric():
             y = sorted(c["line"] for c in entry["commands"].get("Y", []))
             k = sorted(mirror(c["line"]) for c in entry["commands"].get("K", []))
             assert y == k, (seed, entry["turn"])
+
+
+# ------------------------------------------------------------------ M3
+
+
+def test_selector_takes_most_urgent_phase_immediately():
+    active = {"THREAT": True, "HOLD": True, "ATTACK": True, "EXPAND": True}
+    assert strategy.select_phase(active, "EXPAND", 0) == ("THREAT", 0)
+
+
+def test_selector_steps_down_only_after_hold_turns():
+    calm_down = {"THREAT": False, "HOLD": False, "ATTACK": False, "EXPAND": True}
+    phase, calm = "THREAT", 0
+    seen = []
+    for _ in range(strategy.HOLD_TURNS):
+        phase, calm = strategy.select_phase(calm_down, phase, calm)
+        seen.append(phase)
+    assert seen == ["THREAT"] * (strategy.HOLD_TURNS - 1) + ["EXPAND"]
+
+
+def test_selector_resets_calm_when_condition_returns():
+    threat = {"THREAT": True, "HOLD": False, "ATTACK": False, "EXPAND": True}
+    calm_down = {**threat, "THREAT": False}
+    phase, calm = strategy.select_phase(calm_down, "THREAT", 0)
+    phase, calm = strategy.select_phase(threat, phase, calm)
+    assert (phase, calm) == ("THREAT", 0)
+
+
+def test_warrior_guards_our_building_when_enemy_flag_approaches():
+    # 전투병이 우리 건물 위에 있고 적 깃발병이 3칸 밖에서 다가온다: 쫓아가지 않고 건물을 지킨다.
+    w = world([building(0, (5, 5), owner="Y", score=2)],
+              units={("Y", "W", (5, 5)): 1, ("K", "F", (8, 5)): 1}, gold=0)
+    actions = strategy.decide(w)
+    assert strategy.note() == "THREAT"
+    assert not [a for a in actions if isinstance(a, Move) and a.kind == "W"]

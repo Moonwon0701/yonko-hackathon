@@ -46,6 +46,8 @@ adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 - `main.py` — 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다.
   전략이나 파싱을 넣지 않는다.
 - `starter/` — 운영진 스타터 킷 원본. **고치지 않는다.** 참고와 비교 테스트용이다.
+- `devtool/` — 운영진 공식 개발도구(`dev_tool.zip`, 2026-09-27) 원본. 공식 엔진·맵 생성기·러너. **고치지 않는다.**
+  `sim/official.py`만 이것을 불러온다. 제출 ZIP에 넣지 않는다.
 - 제출 ZIP은 `scripts/build_submission.py`로만 만든다.
 
 ## 파일 담당

@@ -158,22 +158,25 @@ def decide(world: World) -> list[Action]:
     budget -= make_f * fc
     if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
         make_w += budget // wc
-    if make_w:
-        actions.append(Spawn("W", make_w))
-    if make_f:
-        actions.append(Spawn("F", make_f))
-    base = world.map.bases[me]
-
-    # 3) 전투병: 과제 배정 → 이동. 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다.
-    warriors = with_spawned(world.units_of(me, "W"), base, make_w, key)
+    # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
     tasks = warrior_tasks(world, enemy_flags, threat, values, capturing(plan, dists))
     tasks += guard_tasks(pressured, threat, values, profile)
     tasks.sort(key=lambda t: key(t.pos))
-    w_plan, leftover, arrival = assign_warriors(warriors, tasks, dist_to)
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
     goals = set(enemy_flags) or {b.pos for b in free_targets}
     goal_dist = distance_map(goals, passable)
+    sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
+    w_site = spawn_site(sites, distance_map(goals | {t.pos for t in tasks}, passable), threat)
+    f_site = spawn_site(sites, distance_map({b.pos for b in free_targets}, passable), threat)
+    if make_w:
+        actions.append(Spawn("W", make_w, None if w_site == sites[0] else w_site))
+    if make_f:
+        actions.append(Spawn("F", make_f, None if f_site == sites[0] else f_site))
+
+    # 3) 전투병: 과제 배정 → 이동. 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다.
+    warriors = with_spawned(world.units_of(me, "W"), w_site, make_w, key)
+    w_plan, leftover, arrival = assign_warriors(warriors, tasks, dist_to)
     moving: Counter[tuple[Pos, Pos | None]] = Counter()  # (출발 칸, 목표 칸 또는 None=공통 목표) → 인원
     moving.update(w_plan)
     moving.update((pos, None) for pos in leftover)
@@ -189,7 +192,7 @@ def decide(world: World) -> list[Action]:
     # 4) 깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 안전한 칸으로만 이동한다.
     pulled = {b.id for b in others if b.pos in enemy_flags and b.pos in arrival}
     targets = free_targets + [b for b in others if b.id in pulled]
-    flags = with_spawned(flags, base, make_f, key)
+    flags = with_spawned(flags, f_site, make_f, key)
     plan = assign(flags, targets, dists, values, threat, pulled, profile)
 
     def safe(pos: Pos) -> bool:
@@ -427,6 +430,13 @@ def assign_warriors(
         arrival[task.pos] = chosen[-1][0]
         remaining.remove(task)
     return plan, pool, arrival
+
+
+def spawn_site(sites: list[Pos], goal_dist: dict[Pos, int], threat: dict[Pos, int]) -> Pos:
+    """생산할 칸. `sites[0]`은 본진, 나머지는 우리 병원. 적 전투병이 닿는 병원은 빼고(새 유닛이 바로 잡힌다),
+    목표까지 가장 가까운 곳. 거리가 같으면 앞의 것(본진)."""
+    usable = [s for i, s in enumerate(sites) if i == 0 or not threat.get(s, 0)]
+    return min(usable, key=lambda s: goal_dist.get(s, 10**6))
 
 
 def enemy_spawnable(world: World) -> list[tuple[Pos, int]]:

@@ -3,7 +3,7 @@
 - 날짜: 2026-09-27
 - 요청한 사람: 문원 (9/27 단독 작업일 — 성혁·현진 담당 파일도 문원 요청으로 수정)
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI
-- PR: (올린 뒤 기입) (브랜치 `moonwon/tele-routing`)
+- PR: #31 (브랜치 `moonwon/tele-routing`)
 
 ## 프롬프트 (원문 그대로)
 

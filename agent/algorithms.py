@@ -40,15 +40,24 @@ def first_step(
     return None
 
 
-def distance_map(sources: Collection[Pos], passable: Callable[[Pos], bool]) -> dict[Pos, int]:
-    """여러 출발 칸에서 각 칸까지의 최단 거리(4방향). 닿을 수 없는 칸은 키가 없다."""
+def distance_map(
+    sources: Collection[Pos], passable: Callable[[Pos], bool], portals: Sequence[Pos] = (),
+) -> dict[Pos, int]:
+    """여러 출발 칸에서 각 칸까지의 최단 거리(4방향). 닿을 수 없는 칸은 키가 없다.
+
+    `portals`(우리 역)는 서로 비용 1로 이어진다 — 순간이동도 한 턴을 쓰기 때문이다(도착한 유닛은 그 턴에 더 못
+    움직인다). 비어 있으면 걸어서만의 거리.
+    """
+    gates = set(portals)
     dist = {pos: 0 for pos in sources}
     queue = deque(dist)
     while queue:
         x, y = queue.popleft()
         d = dist[(x, y)] + 1
-        for dx, dy in DEFAULT_ORDER:
-            pos = (x + dx, y + dy)
+        nexts = [(x + dx, y + dy) for dx, dy in DEFAULT_ORDER]
+        if (x, y) in gates:
+            nexts += portals
+        for pos in nexts:
             if pos not in dist and passable(pos):
                 dist[pos] = d
                 queue.append(pos)
@@ -69,10 +78,13 @@ def threat_map(stacks: Collection[tuple[Pos, int]], passable: Callable[[Pos], bo
     return threat
 
 
-def step_along(start: Pos, dist: dict[Pos, int], order: Sequence[Pos] = DEFAULT_ORDER) -> Pos | None:
-    """거리표 `dist`(목표에서 잰 거리)를 한 칸 줄이는 이웃 칸. 거리가 같으면 `order` 순서.
+def step_along(
+    start: Pos, dist: dict[Pos, int], order: Sequence[Pos] = DEFAULT_ORDER, portals: Sequence[Pos] = (),
+) -> Pos | None:
+    """거리표 `dist`(목표에서 잰 거리)를 한 칸 줄이는 칸. 거리가 같으면 `order` 순서.
 
-    이미 목표(거리 0) 위에 있거나 닿을 수 없으면 None.
+    상하좌우 이웃을 먼저 보고, 없으면 `start`가 역일 때 다른 역(`portals` 순서)을 본다 — 붙어 있지 않은 칸을
+    돌려주면 순간이동이라는 뜻이다. 이미 목표(거리 0) 위에 있거나 닿을 수 없으면 None.
     """
     here = dist.get(start)
     if not here:
@@ -82,4 +94,8 @@ def step_along(start: Pos, dist: dict[Pos, int], order: Sequence[Pos] = DEFAULT_
         pos = (x + dx, y + dy)
         if dist.get(pos) == here - 1:
             return pos
+    if start in portals:
+        for pos in portals:
+            if pos != start and dist.get(pos) == here - 1:
+                return pos
     return None

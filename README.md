@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 문원 | `agent/adapter.py`, `agent/world.py` | 게임 입출력 ↔ `World` 변환. 필요 시 로컬 시뮬레이터 |
 | 성혁 | `agent/algorithms.py` | 경로 탐색 등 순수 알고리즘 함수 |
-| 현진 | `agent/strategy.py` | `decide(world) -> actions` 판단 로직 |
+| 현진 | `agent/strategy.py`, `agent/bt.py` | `decide(world) -> actions` 판단 로직, 행동 트리 노드 |
 
 전략은 규칙 기반입니다. 행동 트리(BT)가 국면을 고르고, 효용 점수가 건물 가치를 매겨 유닛에 목표를
 나눕니다. 운영진 답변(9/27)에 따르면 소스 코드 안에 적은 상수는 학습한 가중치라도 허용되고, 별도 데이터
@@ -20,12 +20,13 @@
 ## 폴더 구조
 
 봇은 한 방향으로만 의존합니다: `adapter.py → world.py → algorithms.py → strategy.py`.
+`strategy.py`가 쓰는 행동 트리 노드는 게임과 무관한 `bt.py`에 따로 있습니다.
 게임 입출력 형식은 `adapter.py`만 알고, `strategy.py`는 `World` 객체만 봅니다.
 
 | 위치 | 내용 |
 | --- | --- |
 | `main.py` | 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다 |
-| `agent/` | 봇 본체 (위 네 파일). 제출 ZIP에는 `main.py`, `agent/`, `submission.json`만 들어간다 |
+| `agent/` | 봇 본체 (위 다섯 파일). 제출 ZIP에는 `main.py`, `agent/`, `submission.json`만 들어간다 |
 | `sim/` | 로컬 시뮬레이터: 대전(arena), 리플레이 뷰어, 행동 비교(diff) |
 | `scripts/` | 제출 ZIP 만들기, 이긴 경기·진 경기 분석 |
 | `tests/` | `pytest` 테스트 |

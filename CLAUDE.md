@@ -34,13 +34,17 @@
 
 ```
 adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
+                                   bt.py  ---------^
 ```
 
 - `agent/adapter.py` — 게임 입출력 형식(stdin 블록, 명령 줄 문법)을 아는 **유일한** 파일.
   입력 텍스트를 `World`로 바꾸고, 우리 행동을 명령 줄로 되돌린다. 전략 판단은 넣지 않는다.
 - `agent/world.py` — 게임 상태를 담는 우리만의 데이터 구조. API 필드명도, 통신도 없다.
+  규칙 그대로인 계산(전투병 값, 점령 한 단계 비용 등)은 `World` 메서드로 둔다. 추측·판단은 넣지 않는다.
 - `agent/algorithms.py` — 경로 탐색을 포함한 알고리즘은 여기에 순수 함수로. 같은 입력이면
   같은 출력, I/O 없음. 잡동사니 창고가 되지 않게, 게임 상태 판단이나 전략은 넣지 않는다.
+- `agent/bt.py` — 행동 트리 노드(Selector·Sequence·Condition·Act·Latch). 게임을 모르는 범용 코드.
+  트리 조립은 strategy.py가 한다.
 - `agent/strategy.py` — `decide(world) -> actions`. `World` 객체만 사용하고, API 형식이나
   네트워크 호출은 절대 쓰지 않는다. 행동은 `world.py`의 `Spawn`·`Move` 등으로 돌려준다.
 - `main.py` — 제출 진입 파일. 입력 루프만 돌리고, 어떤 예외가 나도 매 턴 `END`를 출력한다.
@@ -56,7 +60,7 @@ adapter.py  ->  world.py  ->  algorithms.py  ->  strategy.py
 | --- | --- |
 | 문원 | `agent/adapter.py`, `agent/world.py` |
 | 성혁 | `agent/algorithms.py` |
-| 현진 | `agent/strategy.py` |
+| 현진 | `agent/strategy.py`, `agent/bt.py` |
 
 남의 담당 파일을 고쳐야 하면, 먼저 담당자에게 말하고 수정은 최소한으로 한다.
 

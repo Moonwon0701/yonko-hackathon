@@ -15,7 +15,8 @@ M2 — 위험 판단 + 전투병 과제 + 깃발 뽑기 (docs/roadmap.md)
   이번 턴 도착할 때까지 한 칸 앞에서 기다린다(깃발병만 들어가면 경합이라 점령이 안 된다).
 - 전투병 수: 적 전투병 + 1 (최소 MIN_WARRIORS)
 
-구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝).
+구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝,
+노드 정의는 agent/bt.py).
 - TURN_TREE(Sequence): 상황 읽기 → PHASE_TREE → 점령 계획 → 생산 → 전투병 이동 → 깃발병 이동 → 우선순위
 - PHASE_TREE(Selector): 아래 국면 가지 중 처음 성립하는 것의 가중치를 쓴다
 - FLAG_TREE(Selector): 깃발병 한 명의 다음 칸 — 안전하게 다가가기 → 대기 → 피하기 → 그래도 다가가기
@@ -39,16 +40,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from agent.algorithms import DEFAULT_ORDER, distance_map, step_along, threat_map
+from agent.algorithms import DEFAULT_ORDER, distance_map, manhattan, step_along, threat_map
+from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,
-    CAPTURE_COST,
-    ENG_COST_FLOOR,
-    ENG_DISCOUNT,
     HALL_BONUS,
-    LIBRARY_DISCOUNT,
-    MIN_CAPTURE_COST,
-    PLAZA_CAPTURE_COST,
     TELE_MAX_UNITS,
     TOTAL_TURNS,
     UNIT_COST,
@@ -124,108 +120,6 @@ class Task:
     value: float
 
 
-# ------------------------------------------------------------------ 행동 트리(BT) 뼈대
-#
-# 노드는 tick(ctx)로 실행하고 성공(True)·실패(False)를 돌려준다. 매 턴 루트부터 한 번 끝까지 평가한다.
-# 매 턴 모든 유닛의 행동을 새로 정하므로 여러 턴에 걸쳐 "실행 중"인 노드는 없다(RUNNING 상태를 두지 않는다).
-# 턴을 넘어 기억해야 하는 것(지금 국면)은 Latch 노드가 ctx.phase에 적어 둔다.
-
-
-class Node:
-    """BT 노드. `name`은 사람이 읽는 이름으로, tree_text()와 보고서의 트리 그림에 그대로 나온다."""
-
-    kind = "?"
-
-    def __init__(self, name: str, *children: Node) -> None:
-        self.name = name
-        self.children = children
-
-    def tick(self, ctx) -> bool:
-        raise NotImplementedError
-
-    def lines(self, depth: int = 0) -> list[str]:
-        out = ["  " * depth + f"{self.kind} {self.name}"]
-        for child in self.children:
-            out += child.lines(depth + 1)
-        return out
-
-
-class Selector(Node):
-    """대안 목록: 자식을 차례로 실행해 처음 성공한 곳에서 멈춘다. 모두 실패하면 실패."""
-
-    kind = "?"
-
-    def tick(self, ctx) -> bool:
-        return any(child.tick(ctx) for child in self.children)
-
-
-class Sequence(Node):
-    """순서대로 실행: 자식이 모두 성공해야 성공. 하나라도 실패하면 거기서 멈춘다."""
-
-    kind = "→"
-
-    def tick(self, ctx) -> bool:
-        return all(child.tick(ctx) for child in self.children)
-
-
-class Condition(Node):
-    """조건 잎: `test(ctx)`가 참이면 성공. 상태를 바꾸지 않는다."""
-
-    kind = "◇"
-
-    def __init__(self, name: str, test: Callable[..., bool]) -> None:
-        super().__init__(name)
-        self.test = test
-
-    def tick(self, ctx) -> bool:
-        return bool(self.test(ctx))
-
-
-class Act(Node):
-    """행동 잎: `run(ctx)`를 실행한다. False를 돌려주면 실패(할 수 없었다), 그 밖에는 성공."""
-
-    kind = "▶"
-
-    def __init__(self, name: str, run: Callable[..., bool | None]) -> None:
-        super().__init__(name)
-        self.run = run
-
-    def tick(self, ctx) -> bool:
-        return self.run(ctx) is not False
-
-
-class Latch(Node):
-    """국면 유지(히스테리시스): 조건 노드를 감싸, 조건이 풀려도 이 국면이 지금 국면이면 `hold - 1`턴 더
-    성공으로 본다. 더 급한 국면은 Selector에서 앞에 있으므로 언제든 바로 끼어든다.
-
-    ctx.phase = {"name": 지금 국면, "calm": 지금 국면의 조건이 연속으로 풀린 턴 수}
-    """
-
-    kind = "◇"
-
-    def __init__(self, phase: str, condition: Node, hold: int) -> None:
-        super().__init__(f"{condition.name} (풀려도 {hold - 1}턴 유지)")
-        self.phase = phase
-        self.condition = condition
-        self.hold = hold
-
-    def tick(self, ctx) -> bool:
-        current = ctx.phase["name"] == self.phase
-        if self.condition.tick(ctx):
-            if current:
-                ctx.phase["calm"] = 0
-            return True
-        if current and ctx.phase["calm"] + 1 < self.hold:
-            ctx.phase["calm"] += 1
-            return True
-        return False
-
-
-def tree_text() -> str:
-    """판단 트리 전체를 글로 (보고서·문서용): python -c "from agent.strategy import tree_text; print(tree_text())" """
-    return "\n".join(TURN_TREE.lines() + [""] + FLAG_TREE.lines())
-
-
 # ------------------------------------------------------------------ 한 턴 (루트 Sequence)
 
 
@@ -294,7 +188,7 @@ def plan_captures(t: Turn) -> None:
     t.flags = sorted(world.units_of(me, "F"), key=lambda u: t.key(u[0]))
     plan = assign(t.flags, t.free_targets, t.dists, t.values, t.threat, profile=t.profile)
     t.capturing_now = capturing(plan, t.dists)
-    need = sum(stage_cost(world, b) for b in t.capturing_now)
+    need = sum(world.stage_cost(b) for b in t.capturing_now)
     income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
     t.budget = max(0, world.gold[me] - max(0, need - income))  # 점령은 이번 턴 수입 뒤에 치른다
 
@@ -304,7 +198,7 @@ def produce(t: Turn) -> None:
     위치는 M4 병원 생산."""
     world, me, key = t.world, t.world.me, t.key
     budget = t.budget
-    wc = warrior_cost(world, me)
+    wc = world.warrior_cost(me)
     fc = UNIT_COST["F"]
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
@@ -514,7 +408,9 @@ def assign(
                 d = dists[b.id].get(pos)
                 if d is None:
                     continue
-                u = worth[b.id] / (d + (1 if b.id in pulled else stages(b)) + ETA_OFFSET)
+                # 남은 점령 단계: 뽑아 줄 건물·중립은 1, 상대 건물은 중립화 → 점령 2 (목표에 우리 건물은 없다)
+                steps = 1 if b.id in pulled or b.owner is None else 2
+                u = worth[b.id] / (d + steps + ETA_OFFSET)
                 if best is None or u > best[0]:
                     best = (u, i, b)
         if best is None:
@@ -661,12 +557,8 @@ def spawn_site(sites: list[Pos], goal_dist: dict[Pos, int], threat: dict[Pos, in
 def enemy_spawnable(world: World) -> list[tuple[Pos, int]]:
     """상대가 이번 턴 본진에서 새로 만들 수 있는 전투병 (생산한 유닛은 같은 턴에 바로 움직인다)."""
     enemy = world.enemy
-    n = world.gold[enemy] // warrior_cost(world, enemy)
+    n = world.gold[enemy] // world.warrior_cost(enemy)
     return [(world.map.bases[enemy], n)] if n else []
-
-
-def warrior_cost(world: World, team: str) -> int:
-    return max(ENG_COST_FLOOR, UNIT_COST["W"] - len(world.owned(team, "ENG")) * ENG_DISCOUNT)
 
 
 def with_spawned(
@@ -680,19 +572,6 @@ def with_spawned(
 
 
 # ------------------------------------------------------------------ 건물 가치·비용
-
-
-def stages(b: Building) -> int:
-    """내 소유가 될 때까지 남은 점령 단계 수. 상대 건물은 중립화 → 점령 2단계."""
-    return 1 if b.owner is None else 2
-
-
-def stage_cost(world: World, b: Building) -> int:
-    """이 건물의 점령 한 단계 비용 (도서관 할인 반영)."""
-    cost = PLAZA_CAPTURE_COST if b.kind == "PLAZA" else CAPTURE_COST
-    if world.owned(world.me, "LIBRARY"):
-        cost = max(MIN_CAPTURE_COST, cost - LIBRARY_DISCOUNT)
-    return cost
 
 
 def estimated_score(world: World, b: Building) -> float:
@@ -743,10 +622,6 @@ def campus_stations(world: World) -> set[int]:
                 world.map.mirror(s.pos) if flip else s.pos,
             )).id)
     return campus
-
-
-def manhattan(a: Pos, b: Pos) -> int:
-    return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
 def normalizer(world: World) -> Callable[[Pos], Pos]:
@@ -807,3 +682,8 @@ FLAG_TREE = Selector(
         m.closer[0] if m.closer and m.enterable(m.closer[0]) else None)),
     Act("제자리", lambda m: None),
 )
+
+
+def tree_text() -> str:
+    """판단 트리 전체를 글로 (보고서·문서용): python -c "from agent.strategy import tree_text; print(tree_text())" """
+    return "\n".join(TURN_TREE.lines() + [""] + FLAG_TREE.lines())

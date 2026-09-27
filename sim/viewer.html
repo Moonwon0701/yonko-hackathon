@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>깃발 대항전 리플레이</title>
+<style>
+  :root {
+    --bg: #f6f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #dcdcd6;
+    --floor: #ecebe6; --wall: #3b3b38; --Y: #1f4fa8; --K: #b01f35;
+    --Y-soft: #d6e2f7; --K-soft: #f6d5da; --N-soft: #ffffff; --warn: #b7791f; --bad: #c0392b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614; --panel: #1f1f1d; --ink: #ecebe6; --muted: #9d9d96; --line: #34342f;
+      --floor: #2a2a27; --wall: #0c0c0b; --Y: #6d9bf0; --K: #f07083;
+      --Y-soft: #22365c; --K-soft: #5a2530; --N-soft: #3a3a36; --warn: #e0a84a; --bad: #ef6b5e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex;
+           gap: 16px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .meta { color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(300px, 640px) minmax(300px, 1fr);
+         gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  canvas { display: block; width: 100%; height: auto; }
+  #board { cursor: crosshair; border-radius: 4px; }
+  .controls { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .controls button { font: inherit; padding: 4px 10px; border: 1px solid var(--line);
+                     background: var(--panel); color: var(--ink); border-radius: 6px; cursor: pointer; }
+  .controls button:hover { border-color: var(--muted); }
+  #slider { flex: 1; min-width: 120px; }
+  #turnLabel { font-variant-numeric: tabular-nums; min-width: 88px; font-weight: 600; }
+  .opts { display: flex; gap: 14px; margin-top: 8px; color: var(--muted); flex-wrap: wrap; }
+  .score { display: grid; grid-template-columns: auto repeat(6, 1fr); gap: 2px 10px;
+           font-variant-numeric: tabular-nums; }
+  .score .h { color: var(--muted); font-size: 12px; }
+  .team-Y { color: var(--Y); font-weight: 600; } .team-K { color: var(--K); font-weight: 600; }
+  #result { margin-top: 8px; font-weight: 600; }
+  .side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cmds { font: 12px/1.5 ui-monospace, Consolas, monospace; max-height: 260px; overflow: auto;
+          white-space: pre-wrap; word-break: break-all; }
+  .cmds .ignored { color: var(--bad); } .cmds .partial { color: var(--warn); }
+  .cmds .note { color: var(--muted); font-family: system-ui, sans-serif; }
+  .events { font-size: 12px; max-height: 220px; overflow: auto; }
+  .events div { padding: 1px 0; border-bottom: 1px dotted var(--line); }
+  h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+  #tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line);
+         border-radius: 6px; padding: 6px 8px; font-size: 12px; display: none; max-width: 260px;
+         box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 10; white-space: pre-line; }
+  .legend { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  pre.stderr { font-size: 11px; max-height: 120px; overflow: auto; margin: 0; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>깃발 대항전 리플레이</h1>
+  <span class="meta" id="meta"></span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <canvas id="board" width="640" height="640"></canvas>
+      <div class="controls">
+        <button id="first" title="처음 (Home)">⏮</button>
+        <button id="prev" title="이전 턴 (←)">◀</button>
+        <button id="play" title="재생/정지 (Space)">▶</button>
+        <button id="next" title="다음 턴 (→)">▶|</button>
+        <button id="last" title="끝 (End)">⏭</button>
+        <input type="range" id="slider" min="0" value="0">
+        <span id="turnLabel"></span>
+        <select id="speed" title="재생 속도">
+          <option value="600">느리게</option><option value="250" selected>보통</option>
+          <option value="80">빠르게</option>
+        </select>
+      </div>
+      <div class="opts">
+        <label><input type="checkbox" id="optArrows" checked> 이동 화살표</label>
+        <label><input type="checkbox" id="optEvents" checked> 전투·점령 표시</label>
+        <label><input type="checkbox" id="optScores" checked> 건물 점수</label>
+      </div>
+      <div class="legend">건물 테두리 점선 = 방금 중립이 됨 · 점수 옆 ●: 그 팀이 점수를 앎 · ✕ 전투 · ⚑ 점령/중립화</div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <h2>점수 추이 (실선: 점령 점수, 점선: 자원)</h2>
+      <canvas id="chart" width="640" height="180"></canvas>
+    </div>
+  </section>
+  <section class="side">
+    <div class="card">
+      <div class="score" id="score"></div>
+      <div id="result"></div>
+    </div>
+    <div class="card">
+      <h2 id="cmdTitle">명령</h2>
+      <div class="cols">
+        <div><div class="team-Y" id="nameY"></div><div class="cmds" id="cmdY"></div></div>
+        <div><div class="team-K" id="nameK"></div><div class="cmds" id="cmdK"></div></div>
+      </div>
+    </div>
+    <div class="card"><h2>이벤트</h2><div class="events" id="events"></div></div>
+    <div class="card" id="stderrCard" style="display:none"><h2>stderr (이 턴)</h2><div id="stderr"></div></div>
+  </section>
+</main>
+<div id="tip"></div>
+<script>
+const R = /*__REPLAY__*/null;
+const KIND = {PLAZA:"광장", HALL:"회관", STATION:"역", LIBRARY:"도서", ENG:"공학",
+              HOSPITAL:"병원", WATCH:"방송", DEPOT:"보급"};
+const KIND_FULL = {PLAZA:"중앙광장", HALL:"학생회관", STATION:"역", LIBRARY:"도서관", ENG:"공학관",
+                   HOSPITAL:"병원", WATCH:"방송국", DEPOT:"보급소"};
+const REASON = {instant:"즉시 승리", score:"점령 점수", occupation:"누적 점령-턴",
+                units:"생존 병력 환산", draw:"무승부", forfeit:"몰수"};
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = id => document.getElementById(id);
+const N = R.map.rows.length;
+// 고해상도 화면에서 흐리지 않도록 캔버스 픽셀을 devicePixelRatio배로 잡고 좌표는 CSS 픽셀로 쓴다
+function hidpi(canvas) {
+  const w = canvas.width, h = canvas.height, dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const c = canvas.getContext("2d"); c.scale(dpr, dpr);
+  return [c, w, h];
+}
+const board = $("board");
+const [ctx, BOARD_W, BOARD_H] = hidpi(board);
+const CELL = BOARD_W / N;
+let frame = 0, timer = null;
+const last = R.frames.length - 1;
+$("slider").max = last;
+const bld = R.map.buildings;
+const bIndex = {}; bld.forEach((b, i) => bIndex[b.x + "," + b.y] = i);
+
+$("meta").textContent = `시드 ${R.map.seed ?? "-"} · 맵 총점 ${R.map.total_score} · ` +
+  `Y ${R.result.bots.Y} vs K ${R.result.bots.K}`;
+$("nameY").textContent = "Y · " + R.result.bots.Y;
+$("nameK").textContent = "K · " + R.result.bots.K;
+
+function unitsAt(f) {
+  const m = {};
+  for (const [t, k, x, y, n] of f.units) {
+    const key = x + "," + y;
+    (m[key] ??= {Y: {}, K: {}})[t][k] = n;
+  }
+  return m;
+}
+
+function drawBoard() {
+  const f = R.frames[frame];
+  const turn = R.turns[frame - 1];
+  const units = unitsAt(f);
+  const jn = new Set(f.just_neutral);
+  ctx.clearRect(0, 0, BOARD_W, BOARD_H);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const c = R.map.rows[y][x], px = x * CELL, py = y * CELL;
+    ctx.fillStyle = c === "#" ? css("--wall") : css("--floor");
+    ctx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2);
+    if (c === "H") {
+      const team = R.map.bases.Y[0] === x && R.map.bases.Y[1] === y ? "Y" : "K";
+      ctx.fillStyle = css("--" + team); ctx.globalAlpha = 0.25;
+      ctx.fillRect(px + 1, py + 1, CELL - 2, CELL - 2); ctx.globalAlpha = 1;
+      ctx.fillStyle = css("--" + team); ctx.font = `600 ${CELL * .26}px system-ui`;
+      ctx.fillText("본진 " + team, px + CELL / 2, py + CELL * .22);
+    }
+  }
+  bld.forEach((b, i) => {
+    const owner = f.owner[i], px = b.x * CELL, py = b.y * CELL;
+    ctx.fillStyle = css(owner ? `--${owner}-soft` : "--N-soft");
+    ctx.fillRect(px + 2, py + 2, CELL - 4, CELL - 4);
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = owner ? css("--" + owner) : css("--muted");
+    ctx.setLineDash(jn.has(b.id) ? [4, 3] : []);
+    ctx.strokeRect(px + 3, py + 3, CELL - 6, CELL - 6);
+    ctx.setLineDash([]);
+    ctx.fillStyle = css("--ink"); ctx.font = `600 ${CELL * .25}px system-ui`;
+    ctx.fillText(KIND[b.kind], px + CELL / 2, py + CELL * .24);
+    if ($("optScores").checked) {
+      ctx.font = `${CELL * .22}px system-ui`; ctx.fillStyle = css("--muted");
+      const knowY = f.revealed.Y.includes(b.id), knowK = f.revealed.K.includes(b.id);
+      ctx.textAlign = "right"; ctx.fillText(b.score + "점", px + CELL - 5, py + CELL - 9);
+      ctx.textAlign = "left";
+      if (knowY) { ctx.fillStyle = css("--Y"); ctx.fillText("●", px + 5, py + CELL - 9); }
+      if (knowK) { ctx.fillStyle = css("--K"); ctx.fillText("●", px + 5 + CELL * .18, py + CELL - 9); }
+      ctx.textAlign = "center";
+    }
+  });
+  // 화살표를 먼저 그려 유닛 인원 표시가 가려지지 않게 한다
+  if (turn && $("optArrows").checked) {
+    for (const e of turn.events) if (e.type === "move" || e.type === "tele") arrow(e);
+  }
+  for (const key in units) {
+    const [x, y] = key.split(",").map(Number);
+    const u = units[key];
+    ["Y", "K"].forEach((t, row) => {
+      const parts = ["F", "W", "S"].filter(k => u[t][k]).map(k => k + u[t][k]);
+      if (!parts.length) return;
+      const text = parts.join(" ");
+      ctx.font = `700 ${CELL * .27}px ui-monospace, Consolas, monospace`;
+      const w = Math.min(CELL - 2, ctx.measureText(text).width + 6), h = CELL * .32;
+      const bx = x * CELL + (CELL - w) / 2, by = y * CELL + CELL * (row ? .70 : .42) - h / 2;
+      ctx.fillStyle = css("--" + t); ctx.fillRect(bx, by, w, h);
+      ctx.fillStyle = "#fff"; ctx.fillText(text, x * CELL + CELL / 2, by + h / 2 + 1, CELL - 4);
+    });
+  }
+  if (turn && $("optEvents").checked) {
+    for (const e of turn.events) {
+      const [x, y] = e.pos || [];
+      if (e.type === "combat") {
+        ctx.strokeStyle = css("--bad"); ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(x * CELL + CELL / 2, y * CELL + CELL / 2, CELL * .46, 0, 7); ctx.stroke();
+        ctx.fillStyle = css("--bad"); ctx.font = `700 ${CELL * .3}px system-ui`;
+        ctx.fillText("✕", x * CELL + CELL * .85, y * CELL + CELL * .15);
+      } else if (e.type === "capture" || e.type === "neutralize" || e.type === "flag_pulled") {
+        ctx.fillStyle = css("--" + (e.type === "flag_pulled" ? (e.team === "Y" ? "K" : "Y") : e.team));
+        ctx.font = `700 ${CELL * .3}px system-ui`;
+        ctx.fillText("⚑", x * CELL + CELL * .15, y * CELL + CELL * .15);
+      } else if (e.type === "contested") {
+        ctx.fillStyle = css("--warn"); ctx.font = `700 ${CELL * .3}px system-ui`;
+        ctx.fillText("⚔", x * CELL + CELL * .15, y * CELL + CELL * .15);
+      }
+    }
+  }
+}
+
+function arrow(e) {
+  const pts = e.path.map(([x, y]) => [x * CELL + CELL / 2, y * CELL + CELL / 2]);
+  const off = e.team === "Y" ? -CELL * .08 : CELL * .08;
+  ctx.strokeStyle = css("--" + e.team); ctx.fillStyle = ctx.strokeStyle;
+  ctx.globalAlpha = .75; ctx.lineWidth = Math.min(1.5 + e.n * .5, 5);
+  ctx.setLineDash(e.type === "tele" ? [6, 4] : []);
+  ctx.beginPath(); ctx.moveTo(pts[0][0] + off, pts[0][1] + off);
+  for (const p of pts.slice(1)) ctx.lineTo(p[0] + off, p[1] + off);
+  ctx.stroke(); ctx.setLineDash([]);
+  const [a, b] = pts.slice(-2), ang = Math.atan2(b[1] - a[1], b[0] - a[0]), s = CELL * .16;
+  ctx.beginPath(); ctx.moveTo(b[0] + off, b[1] + off);
+  ctx.lineTo(b[0] + off - s * Math.cos(ang - .5), b[1] + off - s * Math.sin(ang - .5));
+  ctx.lineTo(b[0] + off - s * Math.cos(ang + .5), b[1] + off - s * Math.sin(ang + .5));
+  ctx.fill(); ctx.globalAlpha = 1;
+}
+
+function countUnits(f, t) {
+  const c = {F: 0, W: 0, S: 0};
+  for (const [tt, k, , , n] of f.units) if (tt === t) c[k] += n;
+  return c;
+}
+
+function drawPanel() {
+  const f = R.frames[frame], turn = R.turns[frame - 1];
+  const rows = [["", "점수", "점령-턴", "자원", "F", "W", "S"]];
+  for (const t of ["Y", "K"]) {
+    const c = countUnits(f, t);
+    rows.push([t, f.score[t], f.occupation[t], f.resource[t], c.F, c.W, c.S]);
+  }
+  $("score").innerHTML = rows.map((r, i) => r.map((v, j) =>
+    `<div class="${i === 0 ? "h" : j === 0 ? "team-" + v : ""}">${v}</div>`).join("")).join("");
+  const res = R.result;
+  let text = "";
+  if (frame === last) {
+    text = res.winner ? `${res.winner} 승 — ${REASON[res.reason]} (${res.turn}턴)` : `무승부 (${res.turn}턴)`;
+    if (res.detail) text += " · " + Object.entries(res.detail).map(([t, v]) => `${t}: ${v}`).join(", ");
+  }
+  $("result").innerHTML = text ? `<span class="${res.winner ? "team-" + res.winner : ""}">${text}</span>` : "";
+  $("cmdTitle").textContent = turn ? `턴 ${turn.turn}에 낸 명령` + (turn.ms ? ` (응답 Y ${turn.ms.Y} ms · K ${turn.ms.K} ms)` : "") : "명령 (시작 상태)";
+  for (const t of ["Y", "K"]) {
+    const cmds = turn?.commands?.[t] ?? [];
+    $("cmd" + t).innerHTML = cmds.length ? cmds.map(c =>
+      `<div class="${c.status}">${esc(c.line)}${c.note ? ` <span class="note">— ${esc(c.note)}</span>` : ""}</div>`
+    ).join("") : '<span class="note">(없음)</span>';
+  }
+  $("events").innerHTML = (turn?.events ?? []).filter(e => e.type !== "move").map(describe).join("") ||
+    '<span class="note">(없음)</span>';
+  const se = turn?.stderr ?? {};
+  $("stderrCard").style.display = Object.keys(se).length ? "" : "none";
+  $("stderr").innerHTML = Object.entries(se).map(([t, s]) =>
+    `<div class="team-${t}">${t}</div><pre class="stderr">${esc(s)}</pre>`).join("");
+  $("turnLabel").textContent = `턴 ${frame} / ${last}`;
+  $("slider").value = frame;
+}
+
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+const at = p => `(${p[0]},${p[1]})`;
+const bname = e => { const b = bld[bIndex[e.pos[0] + "," + e.pos[1]]]; return b ? KIND_FULL[b.kind] + at(e.pos) : at(e.pos); };
+const tm = t => `<span class="team-${t}">${t}</span>`;
+function describe(e) {
+  const fmt = s => ["F", "W", "S"].filter(k => s[k]).map(k => k + s[k]).join(" ") || "-";
+  switch (e.type) {
+    case "spawn": return `<div>${tm(e.team)} 생산 ${e.kind}×${e.n} @${at(e.pos)}</div>`;
+    case "tele": return `<div>${tm(e.team)} TELE ${e.kind}×${e.n} ${at(e.path[0])}→${at(e.path[1])}</div>`;
+    case "combat": return `<div>✕ 전투 ${at(e.pos)}: Y ${fmt(e.before.Y)} vs K ${fmt(e.before.K)} → Y ${fmt(e.after.Y)} / K ${fmt(e.after.K)}</div>`;
+    case "standoff": return `<div>대치 ${at(e.pos)} (양쪽 전투병 없음)</div>`;
+    case "flag_pulled": return `<div>${tm(e.team)} 깃발 뽑힘: ${bname(e)} → 중립</div>`;
+    case "contested": return `<div>⚔ 경합 ${bname(e)} — 점령 진행 없음</div>`;
+    case "capture": return `<div>${tm(e.team)} 점령 ${bname(e)} (비용 ${e.cost})</div>`;
+    case "neutralize": return `<div>${tm(e.team)} 중립화 ${bname(e)} (비용 ${e.cost})</div>`;
+    case "capture_blocked": return `<div>${tm(e.team)} 자원 부족으로 점령 대기 ${bname(e)} (필요 ${e.cost}, 보유 ${e.have})</div>`;
+    case "depot_bonus": return `<div>${tm(e.team)} 보급소 보너스 +15 ${bname(e)}</div>`;
+  }
+  return `<div>${esc(JSON.stringify(e))}</div>`;
+}
+
+const chart = $("chart");
+const [cx, CHART_W, CHART_H] = hidpi(chart);
+function drawChart() {
+  const W = CHART_W, H = CHART_H, pad = 24;
+  cx.clearRect(0, 0, W, H);
+  const maxS = Math.max(R.map.total_score, 1), turns = Math.max(last, 1);
+  const X = i => pad + (W - pad * 2) * i / turns;
+  cx.strokeStyle = css("--line"); cx.lineWidth = 1; cx.beginPath();
+  cx.moveTo(pad, H - pad); cx.lineTo(W - pad, H - pad); cx.stroke();
+  const half = H - pad - (H - pad * 2) * (R.map.total_score / 2) / maxS;
+  cx.setLineDash([2, 4]); cx.beginPath(); cx.moveTo(pad, half); cx.lineTo(W - pad, half); cx.stroke();
+  cx.setLineDash([]);
+  cx.fillStyle = css("--muted"); cx.font = "11px system-ui"; cx.textAlign = "left";
+  cx.fillText("과반", W - pad + 2, half + 4);
+  for (const t of ["Y", "K"]) {
+    cx.strokeStyle = css("--" + t);
+    for (const [key, max, dash] of [["score", maxS, []], ["resource", 40, [3, 3]]]) {
+      cx.setLineDash(dash); cx.lineWidth = dash.length ? 1 : 2; cx.beginPath();
+      R.frames.forEach((f, i) => {
+        const v = f[key][t], y = H - pad - (H - pad * 2) * v / max;
+        i ? cx.lineTo(X(i), y) : cx.moveTo(X(i), y);
+      });
+      cx.stroke();
+    }
+  }
+  cx.setLineDash([]);
+  cx.strokeStyle = css("--ink"); cx.globalAlpha = .4; cx.beginPath();
+  cx.moveTo(X(frame), pad / 2); cx.lineTo(X(frame), H - pad); cx.stroke(); cx.globalAlpha = 1;
+}
+
+function render() { drawBoard(); drawPanel(); drawChart(); }
+function go(i) {
+  frame = Math.max(0, Math.min(last, i)); render();
+  history.replaceState(null, "", "#t=" + frame);  // 주소를 복사하면 이 턴으로 바로 열린다
+}
+function toggle() {
+  if (timer) { clearInterval(timer); timer = null; $("play").textContent = "▶"; return; }
+  if (frame === last) frame = 0;
+  $("play").textContent = "⏸";
+  timer = setInterval(() => { if (frame >= last) toggle(); else go(frame + 1); }, +$("speed").value);
+}
+$("first").onclick = () => go(0); $("last").onclick = () => go(last);
+$("prev").onclick = () => go(frame - 1); $("next").onclick = () => go(frame + 1);
+$("play").onclick = toggle;
+$("speed").onchange = () => { if (timer) { toggle(); toggle(); } };
+$("slider").oninput = e => go(+e.target.value);
+for (const id of ["optArrows", "optEvents", "optScores"]) $(id).onchange = render;
+chart.onclick = e => {
+  const r = chart.getBoundingClientRect(), x = (e.clientX - r.left) * CHART_W / r.width;
+  go(Math.round((x - 24) / (CHART_W - 48) * last));
+};
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if (e.key === "ArrowRight") go(frame + 1);
+  else if (e.key === "ArrowLeft") go(frame - 1);
+  else if (e.key === "Home") go(0);
+  else if (e.key === "End") go(last);
+  else if (e.key === " ") { e.preventDefault(); toggle(); }
+  else return;
+  e.preventDefault();
+});
+board.onmousemove = e => {
+  const r = board.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * N), y = Math.floor((e.clientY - r.top) / r.height * N);
+  if (x < 0 || y < 0 || x >= N || y >= N) return;
+  const f = R.frames[frame], u = unitsAt(f)[x + "," + y];
+  const c = R.map.rows[y][x];
+  let s = `(${x}, ${y}) ` + ({".": "평지", "#": "장애물", "B": "건물", "H": "본진"}[c]);
+  const bi = bIndex[x + "," + y];
+  if (bi !== undefined) {
+    const b = bld[bi], o = f.owner[bi];
+    s += `\n${KIND_FULL[b.kind]} #${b.id} · ${b.score}점 · ${o ? o + " 소유" : "중립"}` +
+         `\n점수 앎: Y ${f.revealed.Y.includes(b.id) ? "○" : "×"} · K ${f.revealed.K.includes(b.id) ? "○" : "×"}`;
+  }
+  if (u) for (const t of ["Y", "K"]) {
+    const p = ["F", "W", "S"].filter(k => u[t][k]).map(k => `${k}${u[t][k]}`);
+    if (p.length) s += `\n${t}: ${p.join(" ")}`;
+  }
+  const tip = $("tip");
+  tip.textContent = s; tip.style.display = "block";
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - 270) + "px"; tip.style.top = (e.clientY + 14) + "px";
+};
+board.onmouseleave = () => $("tip").style.display = "none";
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+const hashTurn = /#t=(\d+)/.exec(location.hash);
+go(hashTurn ? +hashTurn[1] : last);
+</script>
+</body>
+</html>

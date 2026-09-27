@@ -15,7 +15,8 @@ M2 — 위험 판단 + 전투병 과제 + 깃발 뽑기 (docs/roadmap.md)
   이번 턴 도착할 때까지 한 칸 앞에서 기다린다(깃발병만 들어가면 경합이라 점령이 안 된다).
 - 전투병 수: 적 전투병 + 1 (최소 MIN_WARRIORS)
 
-구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝).
+구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝,
+노드 정의는 agent/bt.py).
 - TURN_TREE(Sequence): 상황 읽기 → PHASE_TREE → 점령 계획 → 생산 → 전투병 이동 → 깃발병 이동 → 우선순위
 - PHASE_TREE(Selector): 아래 국면 가지 중 처음 성립하는 것의 가중치를 쓴다
 - FLAG_TREE(Selector): 깃발병 한 명의 다음 칸 — 안전하게 다가가기 → 대기 → 피하기 → 그래도 다가가기

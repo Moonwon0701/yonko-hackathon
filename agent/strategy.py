@@ -15,13 +15,19 @@ M2 — 위험 판단 + 전투병 과제 + 깃발 뽑기 (docs/roadmap.md)
   이번 턴 도착할 때까지 한 칸 앞에서 기다린다(깃발병만 들어가면 경합이라 점령이 안 된다).
 - 전투병 수: 적 전투병 + 1 (최소 MIN_WARRIORS)
 
-M3 — BT 국면 선택 (위층). 국면은 아래층(M1·M2 배정기)이 쓰는 가중치 묶음(Profile)이다.
+구조 — 행동 트리(BT). decide는 TURN_TREE를 한 번 실행한다(트리 전체: tree_text(), 조립은 파일 맨 끝).
+- TURN_TREE(Sequence): 상황 읽기 → PHASE_TREE → 점령 계획 → 생산 → 전투병 이동 → 깃발병 이동 → 우선순위
+- PHASE_TREE(Selector): 아래 국면 가지 중 처음 성립하는 것의 가중치를 쓴다
+- FLAG_TREE(Selector): 깃발병 한 명의 다음 칸 — 안전하게 다가가기 → 대기 → 피하기 → 그래도 다가가기
+- 각 단계가 쓰는 효용 배정기(assign, assign_warriors)는 트리의 행동 잎 안에서 호출하는 부품이다.
+
+M3 — 국면 선택 (위층). 국면은 아래층(M1·M2 배정기)이 쓰는 가중치 묶음(Profile)이다.
 - Selector: 위협 대응 → 굳히기 → 공격 → 확장. 위에서부터 처음 조건이 성립하는 국면을 고른다.
   - 위협 대응(THREAT): 적 깃발병이 GUARD_RADIUS 안에 들어온 우리 건물의 점수 합 ≥ THREAT_PRESSURE
   - 굳히기(HOLD): LATE_TURN 이후이고 추정 점수가 앞섬
   - 공격(ATTACK): 우리 전투병이 적보다 ATTACK_MARGIN 이상 많고 상대가 건물을 갖고 있음
   - 확장(EXPAND): 그 밖 (M2까지의 동작)
-- 히스테리시스: 더 급한 국면으로는 바로 바꾸고, 덜 급한 국면으로는 지금 국면의 조건이 HOLD_TURNS턴
+- 국면 유지(Latch 노드): 더 급한 국면으로는 바로 바꾸고, 덜 급한 국면으로는 지금 국면의 조건이 HOLD_TURNS턴
   연속 풀렸을 때만 내려간다(국면이 턴마다 흔들리지 않게).
 - 지키기 과제: 적 깃발병이 GUARD_RADIUS 안에 있는 우리 건물에 전투병을 세운다(가치 × Profile.guard).
 """
@@ -31,6 +37,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from agent.algorithms import DEFAULT_ORDER, distance_map, step_along, threat_map
 from agent.world import (
@@ -114,96 +121,235 @@ class Task:
     value: float
 
 
-def decide(world: World) -> list[Action]:
-    me, enemy = world.me, world.enemy
-    remember(world)
-    actions: list[Action] = []
-    order = direction_order(world)
-    passable = world.map.passable
-    def dist_to(pos: Pos) -> dict[Pos, int]:
+# ------------------------------------------------------------------ 행동 트리(BT) 뼈대
+#
+# 노드는 tick(ctx)로 실행하고 성공(True)·실패(False)를 돌려준다. 매 턴 루트부터 한 번 끝까지 평가한다.
+# 매 턴 모든 유닛의 행동을 새로 정하므로 여러 턴에 걸쳐 "실행 중"인 노드는 없다(RUNNING 상태를 두지 않는다).
+# 턴을 넘어 기억해야 하는 것(지금 국면)은 Latch 노드가 ctx.phase에 적어 둔다.
+
+
+class Node:
+    """BT 노드. `name`은 사람이 읽는 이름으로, tree_text()와 보고서의 트리 그림에 그대로 나온다."""
+
+    kind = "?"
+
+    def __init__(self, name: str, *children: Node) -> None:
+        self.name = name
+        self.children = children
+
+    def tick(self, ctx) -> bool:
+        raise NotImplementedError
+
+    def lines(self, depth: int = 0) -> list[str]:
+        out = ["  " * depth + f"{self.kind} {self.name}"]
+        for child in self.children:
+            out += child.lines(depth + 1)
+        return out
+
+
+class Selector(Node):
+    """대안 목록: 자식을 차례로 실행해 처음 성공한 곳에서 멈춘다. 모두 실패하면 실패."""
+
+    kind = "?"
+
+    def tick(self, ctx) -> bool:
+        return any(child.tick(ctx) for child in self.children)
+
+
+class Sequence(Node):
+    """순서대로 실행: 자식이 모두 성공해야 성공. 하나라도 실패하면 거기서 멈춘다."""
+
+    kind = "→"
+
+    def tick(self, ctx) -> bool:
+        return all(child.tick(ctx) for child in self.children)
+
+
+class Condition(Node):
+    """조건 잎: `test(ctx)`가 참이면 성공. 상태를 바꾸지 않는다."""
+
+    kind = "◇"
+
+    def __init__(self, name: str, test: Callable[..., bool]) -> None:
+        super().__init__(name)
+        self.test = test
+
+    def tick(self, ctx) -> bool:
+        return bool(self.test(ctx))
+
+
+class Act(Node):
+    """행동 잎: `run(ctx)`를 실행한다. False를 돌려주면 실패(할 수 없었다), 그 밖에는 성공."""
+
+    kind = "▶"
+
+    def __init__(self, name: str, run: Callable[..., bool | None]) -> None:
+        super().__init__(name)
+        self.run = run
+
+    def tick(self, ctx) -> bool:
+        return self.run(ctx) is not False
+
+
+class Latch(Node):
+    """국면 유지(히스테리시스): 조건 노드를 감싸, 조건이 풀려도 이 국면이 지금 국면이면 `hold - 1`턴 더
+    성공으로 본다. 더 급한 국면은 Selector에서 앞에 있으므로 언제든 바로 끼어든다.
+
+    ctx.phase = {"name": 지금 국면, "calm": 지금 국면의 조건이 연속으로 풀린 턴 수}
+    """
+
+    kind = "◇"
+
+    def __init__(self, phase: str, condition: Node, hold: int) -> None:
+        super().__init__(f"{condition.name} (풀려도 {hold - 1}턴 유지)")
+        self.phase = phase
+        self.condition = condition
+        self.hold = hold
+
+    def tick(self, ctx) -> bool:
+        current = ctx.phase["name"] == self.phase
+        if self.condition.tick(ctx):
+            if current:
+                ctx.phase["calm"] = 0
+            return True
+        if current and ctx.phase["calm"] + 1 < self.hold:
+            ctx.phase["calm"] += 1
+            return True
+        return False
+
+
+def tree_text() -> str:
+    """판단 트리 전체를 글로 (보고서·문서용): python -c "from agent.strategy import tree_text; print(tree_text())" """
+    return "\n".join(TURN_TREE.lines() + [""] + FLAG_TREE.lines())
+
+
+# ------------------------------------------------------------------ 한 턴 (루트 Sequence)
+
+
+class Turn:
+    """한 턴의 칠판(blackboard). 트리의 각 단계가 앞 단계의 결과를 여기서 읽고, 자기 결과를 적는다."""
+
+    def __init__(self, world: World) -> None:
+        self.world = world
+        self.phase = _phase
+        self.actions: list[Action] = []
+
+    def dist_to(self, pos: Pos) -> dict[Pos, int]:
+        """걸어서 `pos`까지의 거리표 (경기 내내 캐시)."""
         if pos not in _dist_cache:
-            _dist_cache[pos] = distance_map([pos], passable)
+            _dist_cache[pos] = distance_map([pos], self.world.map.passable)
         return _dist_cache[pos]
 
-    key = normalizer(world)  # 동점일 때의 순서를 자기 본진 기준으로 맞춘다 → 양 진영이 거울처럼 움직인다
+    def tele_to(self, pos: Pos) -> dict[Pos, int]:
+        """우리 역끼리 순간이동(비용 1)을 포함한 `pos`까지의 거리표. 역이 2개 미만이면 걸어서만."""
+        if not self.gates:
+            return self.dist_to(pos)
+        if (pos, self.gates) not in _tele_cache:
+            _tele_cache[(pos, self.gates)] = distance_map([pos], self.world.map.passable, self.gates)
+        return _tele_cache[(pos, self.gates)]
+
+
+def decide(world: World) -> list[Action]:
+    turn = Turn(world)
+    TURN_TREE.tick(turn)
+    return turn.actions
+
+
+def read_situation(t: Turn) -> None:
+    """상황 읽기: 적 위치·위협 맵·건물 가치·목표 후보·국면 조건."""
+    world = t.world
+    me, enemy = world.me, world.enemy
+    remember(world)
+    t.order = direction_order(world)
+    t.key = key = normalizer(world)  # 동점일 때의 순서를 자기 본진 기준으로 맞춘다 → 양 진영이 거울처럼 움직인다
     # 역 순간이동: 우리 역이 2개 이상이면 역끼리 비용 1로 이어진 경로도 최단거리에 넣는다 (전투병 이동에만.
     # 깃발병에 쓰면 효과가 없었다 — docs/benchmarks.md)
     stations = sorted((b.pos for b in world.owned(me, "STATION")), key=key)
-    gates = tuple(stations) if len(stations) >= 2 else ()
-
-    def tele_to(pos: Pos) -> dict[Pos, int]:
-        if not gates:
-            return dist_to(pos)
-        if (pos, gates) not in _tele_cache:
-            _tele_cache[(pos, gates)] = distance_map([pos], passable, gates)
-        return _tele_cache[(pos, gates)]
-    enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
-    enemy_warriors = world.units_of(enemy, "W")
-    threat = threat_map(enemy_warriors + enemy_spawnable(world), passable)
-    values = {b.id: building_value(world, b) for b in world.buildings.values()}
-    others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
-    dists = {b.id: dist_to(b.pos) for b in others}
+    t.gates = tuple(stations) if len(stations) >= 2 else ()
+    t.enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
+    t.enemy_warriors = world.units_of(enemy, "W")
+    t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
+    t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
+    t.others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
+    t.dists = {b.id: t.dist_to(b.pos) for b in t.others}
     # 상대 깃발병이 있는 건물은 경합이라, 전투병이 뽑아 주기 전에는 깃발병 목표가 아니다
-    free_targets = [b for b in others if b.pos not in enemy_flags]
+    t.free_targets = [b for b in t.others if b.pos not in t.enemy_flags]
+    t.pressured = pressured_buildings(world, t.enemy_flags, t.dist_to)
+    t.active = phase_conditions(world, t.pressured)
 
-    # 0) 위층: 국면 선택 → 이번 턴 아래층이 쓸 가중치
-    pressured = pressured_buildings(world, enemy_flags, dist_to)
-    active = phase_conditions(world, pressured)
-    _phase["name"], _phase["calm"] = select_phase(active, _phase["name"], _phase["calm"])
-    profile = PROFILES[_phase["name"]]
 
-    # 1) 지금 있는 깃발병으로 이번 턴 점령할 건물을 정하고, 그 비용만 남긴다.
-    flags = sorted(world.units_of(me, "F"), key=lambda u: key(u[0]))
-    plan = assign(flags, free_targets, dists, values, threat, profile=profile)
-    need = sum(stage_cost(world, b) for b in capturing(plan, dists))
+def enter_phase(t: Turn, name: str) -> None:
+    """국면 가지의 행동 잎: 이번 턴 아래층이 쓸 가중치(Profile)를 정한다."""
+    if t.phase["name"] != name:
+        t.phase.update(name=name, calm=0)
+    t.profile = PROFILES[name]
+
+
+def plan_captures(t: Turn) -> None:
+    """지금 있는 깃발병으로 이번 턴 점령할 건물을 정하고, 그 비용만 남긴다."""
+    world, me = t.world, t.world.me
+    t.flags = sorted(world.units_of(me, "F"), key=lambda u: t.key(u[0]))
+    plan = assign(t.flags, t.free_targets, t.dists, t.values, t.threat, profile=t.profile)
+    t.capturing_now = capturing(plan, t.dists)
+    need = sum(stage_cost(world, b) for b in t.capturing_now)
     income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
-    budget = max(0, world.gold[me] - max(0, need - income))  # 점령은 이번 턴 수입 뒤에 치른다
+    t.budget = max(0, world.gold[me] - max(0, need - income))  # 점령은 이번 턴 수입 뒤에 치른다
 
-    # 2) 생산: 전투병(적 + 1까지) → 깃발병(목표 수만큼) → 남으면 전투병
+
+def produce(t: Turn) -> None:
+    """생산: 전투병(적 + 추가 인원까지) → 깃발병(목표 수만큼) → 남으면 전투병. 위치는 M4 병원 생산."""
+    world, me, key = t.world, t.world.me, t.key
+    budget = t.budget
     wc = warrior_cost(world, me)
     fc = UNIT_COST["F"]
-    nf = sum(n for _, n in flags)
+    nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
-    want_w = max(MIN_WARRIORS, sum(n for _, n in enemy_warriors) + profile.extra_warriors)
+    want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.profile.extra_warriors)
     make_w = min(max(0, want_w - nw), budget // wc) if nf or budget >= fc + wc else 0
     budget -= make_w * wc
-    want_f = max(0, len(free_targets) + SPARE_FLAGS - nf)
+    want_f = max(0, len(t.free_targets) + SPARE_FLAGS - nf)
     make_f = min(budget // fc, want_f)
     budget -= make_f * fc
     if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
         make_w += budget // wc
+    t.make_w, t.make_f = make_w, make_f
     # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
-    tasks = warrior_tasks(world, enemy_flags, threat, values, capturing(plan, dists))
-    tasks += guard_tasks(pressured, threat, values, profile)
-    tasks.sort(key=lambda t: key(t.pos))
+    passable = world.map.passable
+    tasks = warrior_tasks(world, t.enemy_flags, t.threat, t.values, t.capturing_now)
+    tasks += guard_tasks(t.pressured, t.threat, t.values, t.profile)
+    tasks.sort(key=lambda task: key(task.pos))
+    t.tasks = tasks
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
-    goals = set(enemy_flags) or {b.pos for b in free_targets}
-    goal_dist = distance_map(goals, passable)
+    t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
+    t.goal_dist = distance_map(t.goals, passable)
     sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
-    w_site = spawn_site(sites, distance_map(goals | {t.pos for t in tasks}, passable), threat)
-    f_site = spawn_site(sites, distance_map({b.pos for b in free_targets}, passable), threat)
+    t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in tasks}, passable), t.threat)
+    t.f_site = spawn_site(sites, distance_map({b.pos for b in t.free_targets}, passable), t.threat)
     if make_w:
-        actions.append(Spawn("W", make_w, None if w_site == sites[0] else w_site))
+        t.actions.append(Spawn("W", make_w, None if t.w_site == sites[0] else t.w_site))
     if make_f:
-        actions.append(Spawn("F", make_f, None if f_site == sites[0] else f_site))
+        t.actions.append(Spawn("F", make_f, None if t.f_site == sites[0] else t.f_site))
 
-    # 3) 전투병: 과제 배정 → 이동. 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다.
-    warriors = with_spawned(world.units_of(me, "W"), w_site, make_w, key)
-    w_plan, leftover, arrival = assign_warriors(warriors, tasks, dist_to)
+
+def move_warriors(t: Turn) -> None:
+    """전투병: 과제 배정 → 이동(역 순간이동 포함). 이동 뒤 칸별 인원(w_after)은 깃발병 안전 판단에 쓴다."""
+    world, key, order, gates = t.world, t.key, t.order, t.gates
+    warriors = with_spawned(world.units_of(world.me, "W"), t.w_site, t.make_w, key)
+    w_plan, leftover, t.arrival = assign_warriors(warriors, t.tasks, t.dist_to)
     moving: Counter[tuple[Pos, Pos | None]] = Counter()  # (출발 칸, 목표 칸 또는 None=공통 목표) → 인원
     moving.update(w_plan)
     moving.update((pos, None) for pos in leftover)
-    goal_tele = distance_map(goals, passable, gates) if gates else goal_dist
+    goal_tele = distance_map(t.goals, world.map.passable, gates) if gates else t.goal_dist
     w_after: Counter[Pos] = Counter()
     w_steps: Counter[tuple[Pos, Pos]] = Counter()
     w_jumps: Counter[tuple[Pos, Pos]] = Counter()  # 순간이동을 원하는 (출발 역, 도착 역) → 인원
     walk_of: dict[tuple[Pos, Pos], Pos | None] = {}  # 순간이동을 못 하면 대신 걸을 칸
     for (pos, goal), n in moving.items():
-        step = step_along(pos, goal_tele if goal is None else tele_to(goal), order, gates)
+        step = step_along(pos, goal_tele if goal is None else t.tele_to(goal), order, gates)
         if step and manhattan(pos, step) > 1:
             w_jumps[(pos, step)] += n
-            walk_of[(pos, step)] = step_along(pos, goal_dist if goal is None else dist_to(goal), order)
+            walk_of[(pos, step)] = step_along(pos, t.goal_dist if goal is None else t.dist_to(goal), order)
             continue
         w_after[step or pos] += n
         if step:
@@ -212,36 +358,42 @@ def decide(world: World) -> list[Action]:
     for (src, dst), n in w_jumps.items():
         sent = min(n, TELE_MAX_UNITS) if (src, dst) == jump else 0
         if sent:
-            actions.append(Tele(src, "W", sent, dst))
+            t.actions.append(Tele(src, "W", sent, dst))
             w_after[dst] += sent
         walk = walk_of[(src, dst)]
         w_after[walk or src] += n - sent
         if walk and n - sent:
             w_steps[(src, walk)] += n - sent
-    actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
+    t.actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
+    t.w_after = w_after
 
-    # 4) 깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 안전한 칸으로만 이동한다.
-    pulled = {b.id for b in others if b.pos in enemy_flags and b.pos in arrival}
-    targets = free_targets + [b for b in others if b.id in pulled]
-    flags = with_spawned(flags, f_site, make_f, key)
-    plan = assign(flags, targets, dists, values, threat, pulled, profile)
+
+def move_flags(t: Turn) -> None:
+    """깃발병: 전투병이 뽑아 줄 건물까지 목표에 넣어 다시 배정하고, 한 명씩 FLAG_TREE로 다음 칸을 정한다."""
+    pulled = {b.id for b in t.others if b.pos in t.enemy_flags and b.pos in t.arrival}
+    targets = t.free_targets + [b for b in t.others if b.id in pulled]
+    flags = with_spawned(t.flags, t.f_site, t.make_f, t.key)
+    t.plan = assign(flags, targets, t.dists, t.values, t.threat, pulled, t.profile)
+    threat, w_after = t.threat, t.w_after
 
     def safe(pos: Pos) -> bool:
         # 전투병 수가 같으면 서로 상쇄되고 남은 전투병이 없어 깃발병은 살아남는다
         return threat.get(pos, 0) <= w_after[pos]
 
     f_steps: Counter[tuple[Pos, Pos]] = Counter()
-    for pos, b in plan:
-        hold = b.id in pulled and arrival[b.pos] > 1  # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
-        step = flag_step(pos, b.pos, dists[b.id], order, safe, hold)
+    for pos, b in t.plan:
+        hold = b.id in pulled and t.arrival[b.pos] > 1  # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
+        step = flag_step(pos, b.pos, t.dists[b.id], t.order, safe, hold)
         if step:
             f_steps[(pos, step)] += 1
-    actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
+    t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
 
-    now = sorted(capturing(plan, dists), key=lambda b: -values[b.id])
+
+def set_priority(t: Turn) -> None:
+    """이번 턴 점령할 건물이 둘 이상이면 가치 순으로 PRIORITY."""
+    now = sorted(capturing(t.plan, t.dists), key=lambda b: -t.values[b.id])
     if len(now) >= 2:
-        actions.append(Priority(tuple(b.pos for b in now)))
-    return actions
+        t.actions.append(Priority(tuple(b.pos for b in now)))
 
 
 def remember(world: World) -> None:
@@ -294,18 +446,14 @@ def phase_conditions(world: World, pressured: list[tuple[Building, int]]) -> dic
 
 
 def select_phase(active: dict[str, bool], current: str, calm: int) -> tuple[str, int]:
-    """BT Selector + 히스테리시스. 돌려주는 값: (이번 턴 국면, 갱신된 calm).
+    """PHASE_TREE만 따로 실행한다(테스트용). 돌려주는 값: (이번 턴 국면, 갱신된 calm).
 
     조건이 성립하는 국면 중 우선순위가 가장 높은 것을 고른다. 그것이 지금 국면보다 급하거나 같으면
-    바로 따르고, 덜 급하면 지금 국면의 조건이 HOLD_TURNS턴 연속 풀렸을 때만 내려간다.
+    바로 따르고, 덜 급하면 지금 국면의 조건이 HOLD_TURNS턴 연속 풀렸을 때만 내려간다(Latch).
     """
-    wanted = next(p for p in PHASE_ORDER if active[p])
-    if PHASE_ORDER.index(wanted) <= PHASE_ORDER.index(current):
-        return wanted, 0
-    if active[current]:
-        return current, 0
-    calm += 1
-    return (wanted, 0) if calm >= HOLD_TURNS else (current, calm)
+    ctx = SimpleNamespace(active=active, phase={"name": current, "calm": calm})
+    PHASE_TREE.tick(ctx)
+    return ctx.phase["name"], ctx.phase["calm"]
 
 
 # ------------------------------------------------------------------ 깃발병
@@ -355,6 +503,32 @@ def assign(
     return plan
 
 
+class FlagMove:
+    """깃발병 한 명의 칠판. FLAG_TREE가 `step`(다음 칸, None = 제자리)을 정한다."""
+
+    def __init__(
+        self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
+        safe: Callable[[Pos], bool], hold: bool,
+    ) -> None:
+        self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
+        self.here = dist.get(pos)
+        neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
+        self.neighbors = [n for n in neighbors if n in dist]
+        # 목표 쪽으로 한 칸 줄이는 칸. 이미 목표 위(거리 0)면 없다
+        self.closer = [n for n in self.neighbors if self.here and dist[n] == self.here - 1]
+        self.step: Pos | None = None
+
+    def enterable(self, n: Pos) -> bool:
+        """`hold`(전투병이 아직 못 옴)면 목표 칸에는 들어가지 않고 한 칸 앞에서 기다린다."""
+        return not (self.hold and n == self.goal)
+
+    def go(self, n: Pos | None) -> bool:
+        if n is None:
+            return False
+        self.step = n
+        return True
+
+
 def flag_step(
     pos: Pos,
     goal: Pos,
@@ -363,31 +537,14 @@ def flag_step(
     safe: Callable[[Pos], bool],
     hold: bool,
 ) -> Pos | None:
-    """깃발병 한 명의 다음 칸 (None = 제자리).
+    """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
     피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
     """
-    here = dist.get(pos)
-    if here is None:
-        return None
-    neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
-    neighbors = [n for n in neighbors if n in dist]
-    if here == 0:
-        if safe(pos):
-            return None
-        closer = []
-    else:
-        closer = [n for n in neighbors if dist[n] == here - 1]
-        for n in closer:
-            if safe(n) and not (hold and n == goal):
-                return n
-        if safe(pos):
-            return None
-    escape = sorted((n for n in neighbors if safe(n)), key=lambda n: dist[n])
-    if escape:
-        return escape[0]
-    return closer[0] if closer and not (hold and closer[0] == goal) else None
+    m = FlagMove(pos, goal, dist, order, safe, hold)
+    FLAG_TREE.tick(m)
+    return m.step
 
 
 def capturing(plan: list[tuple[Pos, Building]], dists: dict[int, dict[Pos, int]]) -> list[Building]:
@@ -583,3 +740,47 @@ def direction_order(world: World) -> tuple[Pos, ...]:
     if base_x * 2 > world.map.width - 1:
         return tuple((-dx, -dy) for dx, dy in DEFAULT_ORDER)
     return DEFAULT_ORDER
+
+
+# ------------------------------------------------------------------ 트리 조립
+#
+# 트리 전체를 글로 보려면 tree_text(). 노드 이름이 곧 보고서의 판단 조건 설명이다.
+
+
+def phase_branch(name: str, condition: str) -> Node:
+    """국면 가지: [조건(국면 유지 포함)] → [가중치 적용]."""
+    test = Condition(condition, lambda ctx: ctx.active[name])
+    return Sequence(name, Latch(name, test, HOLD_TURNS), Act(f"{name} 가중치 적용", lambda ctx: enter_phase(ctx, name)))
+
+
+PHASE_TREE = Selector(
+    "국면 선택 (위에서부터 처음 성립하는 가지)",
+    phase_branch("THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}"),
+    phase_branch("HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬"),
+    phase_branch("ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐"),
+    Sequence("EXPAND", Act("EXPAND 가중치 적용", lambda ctx: enter_phase(ctx, "EXPAND"))),
+)
+
+TURN_TREE = Sequence(
+    "한 턴",
+    Act("상황 읽기 (위협 맵·건물 가치·목표 후보)", read_situation),
+    PHASE_TREE,
+    Act("점령 계획 → 점령 비용 예약", plan_captures),
+    Act("생산 (전투병 → 깃발병 → 남으면 전투병, 병원 위치)", produce),
+    Act("전투병 과제 배정·이동 (역 순간이동)", move_warriors),
+    Act("깃발병 재배정 → 한 명씩 깃발병 트리", move_flags),
+    Act("동시 점령 우선순위", set_priority),
+)
+
+FLAG_TREE = Selector(
+    "깃발병 한 칸",
+    Sequence("목표에 닿을 수 없음", Condition("목표까지 경로 없음", lambda m: m.here is None), Act("제자리", lambda m: None)),
+    Act("목표 쪽 안전한 칸으로", lambda m: m.go(next(
+        (n for n in m.closer if m.safe(n) and m.enterable(n)), None))),
+    Sequence("대기", Condition("지금 칸이 안전", lambda m: m.safe(m.pos)), Act("제자리", lambda m: None)),
+    Act("가장 목표에 가까운 안전한 이웃으로 피하기", lambda m: m.go(min(
+        (n for n in m.neighbors if m.safe(n)), key=lambda n: m.dist[n], default=None))),
+    Act("위험해도 목표 쪽으로", lambda m: m.go(
+        m.closer[0] if m.closer and m.enterable(m.closer[0]) else None)),
+    Act("제자리", lambda m: None),
+)

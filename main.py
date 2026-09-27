@@ -10,7 +10,7 @@ import traceback
 from collections import Counter
 
 from agent import adapter
-from agent.strategy import decide
+from agent.strategy import decide, note
 
 MAX_ERROR_LOGS = 30  # stderr는 경기당 1 MiB 한도
 
@@ -21,10 +21,10 @@ def log_init(init: list[str]) -> None:
 
 
 def log_turn(turn: int, ms: float, lines: list[str]) -> None:
-    """턴당 한 줄(약 30 B): `#t 12 3.1ms SPAWN1 MOVE4`. 160턴이어도 5 KB 정도다."""
+    """턴당 한 줄(약 40 B): `#t 12 3.1ms EXPAND SPAWN1 MOVE4`. 160턴이어도 7 KB 정도다."""
     kinds = Counter(line.split(maxsplit=1)[0] for line in lines)
     counts = " ".join(f"{k}{n}" for k, n in sorted(kinds.items()))
-    print(f"#t {turn} {ms:.1f}ms {counts}".rstrip(), file=sys.stderr)
+    print(f"#t {turn} {ms:.1f}ms {note()} {counts}".rstrip(), file=sys.stderr)
 
 
 def main() -> None:

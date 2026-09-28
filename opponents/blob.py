@@ -4,11 +4,15 @@
 10~30턴 수비 배치 24%, 전투병 칸 13.8곳·칸당 5.5명(뭉침), 전투의 58%가 상대 진영. 초반 깃발병 8명으로 10턴 건물 9:5,
 30턴부터 깃발병 4명. 70~80턴 상대 학생회관을 빼앗고 생산 352:322로 이겼다.
 
-이 봇은 FLAGS_UNTIL턴까지 깃발병 총원 EARLY_FLAGS명, 그 뒤 LATE_FLAGS명. 수비 배치·초소·추가 호위 없이 전투병을 공통
+이 봇은 FLAGS_UNTIL턴까지 깃발병 총원 EARLY_FLAGS명, 그 뒤 LATE_FLAGS명. 수비 배치·초소 없이 전투병을 공통
 목표로 뭉쳐 보내고, RAID_FROM턴부터 상대 학생회관·공학관에 "위협 + RAID_EXTRA"명을 보내 빼앗는다. 공격 국면 문턱을 낮춘다.
+깃발병 호위를 켠다(Team 24도 31~80턴 호위 71%).
+
+호위 없이는 `main`(8fd93ee) 승점률이 30% / 60%(시드 100~119 / 200~219)로 흔들렸고, 호위를 켜면 40% / 35%에 생산 격차
+(상대 +18~20)가 두 묶음 모두 나온다(docs/benchmarks.md "상대 풀").
 """
 
-from mimic import Task, add_tasks, each_turn, run, s, scale_capture
+from mimic import Task, add_tasks, each_turn, escort_flags, run, s, scale_capture
 
 EARLY_FLAGS, LATE_FLAGS, FLAGS_UNTIL = 8, 4, 25
 RAID_FROM = 40
@@ -39,6 +43,7 @@ s.ATTACK_MARGIN = 0
 each_turn(flags)
 add_tasks("W", raid)
 scale_capture(target)
+escort_flags(1.0)
 
 if __name__ == "__main__":
     run()

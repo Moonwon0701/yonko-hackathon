@@ -121,9 +121,8 @@ ESCORT_VALUE = 1.0
 # 모든 건물에 넓게 세면 크게 나빠졌다(2·3·4걸음: 상대 풀 56.5 → 46.5 / 30.0 / 17.5%). 경제 건물만 2걸음: 새 시드 50개 상대
 # 풀 56.4 → 62.6%, 서버 맵 49개 main 상대 59.2%. 호위만 켠 버전과 직접 대결은 새 시드 56.0%, 서버 맵 45.9%로 엇갈림
 ECON_DEFEND_REACH = 2
-# 급습 멈춤: 우리 경제 건물 RAID_HOME_SAFE걸음 안에 적 전투병이 있으면 급습 과제를 내지 않는다(0 = 늘 급습). 같은 경기에서
-# 우리 공학관 4칸 안 전투병 10~14명이 상대 건물 급습 길에 공학관을 지나쳤다
-RAID_HOME_SAFE = 0
+# 같은 경기에서 우리 공학관 4칸 안 전투병 10~14명이 상대 건물 급습 길에 공학관을 지나쳤지만, 그때 급습을 멈추거나 지나가는
+# 병력을 세우는 것은 모두 나빴다(docs/benchmarks.md "파라미터 탐색")
 # 전선: 적이 오기 전에, 점령을 끝낸 우리 건물 중 가장 노출된 곳에 전투병을 미리 세운다.
 # 노출 순위 = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리). 작을수록 전선
 FRONT_COUNT = 3
@@ -561,11 +560,6 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     깃발병이 위험 할인 없이 뒤따라 중립화 → 점령한다. 우리 전투병이 적 + RAID_SURPLUS보다 적으면 하지 않는다."""
     world = t.world
     if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
-        return []
-    if RAID_HOME_SAFE and any(
-        t.dist_to(b.pos).get(p, 99) <= RAID_HOME_SAFE for b in world.owned(world.me) if b.kind in ECON_KINDS
-        for p, _ in t.enemy_warriors
-    ):
         return []
     return [Task("급습", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight)
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]

@@ -61,10 +61,9 @@ GRID: dict[str, list] = {
     "RAID_STEAL": [1.0, 2.0, 3.0],
     # 구조 변경 스위치 (첫 값 = 끔 또는 예전 동작)
     "ESCORT_VALUE": [0.0, 0.5, 1.0, 2.0],
-    "ECON_EVICT_RADIUS": [2, 3, 4],
+    "ECON_EVICT_RADIUS": [2, 3, 4, 5],
     "ECON_WEIGHT": [1.0, 2.0, 3.0],
     "ECON_DEFEND_REACH": [1, 2, 3],
-    "RAID_HOME_SAFE": [0, 2, 3, 4],
 }
 
 

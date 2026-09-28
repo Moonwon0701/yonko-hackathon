@@ -63,6 +63,14 @@ def test_more_flags_first_when_enemy_owns_more_buildings():
     assert spawns == [Spawn("F", 3)]
 
 
+def test_flags_stop_at_max_flags_even_with_many_targets(monkeypatch):
+    # 목표 건물이 10개여도 깃발병은 MAX_FLAGS명까지만: 남는 자원은 전투병으로 (상한이 없으면 깃발병 5명을 더 만든다)
+    monkeypatch.setattr(strategy, "MAX_FLAGS", 6)
+    w = world([building(i, (3 + i, 3)) for i in range(10)], units={("Y", "F", (0, 7)): 6}, gold=40)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("W", 13)]
+
+
 def test_max_assignment_beats_greedy_pick():
     from agent.algorithms import max_assignment
     # 탐욕이면 가장 큰 10(0→0)을 먼저 잡아 합 11. 최적은 0→1, 1→0으로 합 17

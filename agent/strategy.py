@@ -65,6 +65,9 @@ from agent.world import (
 MIN_WARRIORS = 3  # 전투병 최소 인원 (적 전투병이 적어도 이만큼은 둔다)
 SPARE_FLAGS = 1  # 목표 건물 수보다 이만큼 더 많은 깃발병까지만 만든다
 MIN_FLAGS = 2  # 깃발병이 이보다 적으면 전투병보다 먼저 만든다 (목표가 있을 때만)
+# 깃발병 총원 상한. 목표 건물 수만큼 깃발병을 만들면 20턴까지 깃발병에 35~75를 써서, 수입이 같은 상대보다
+# 전투병이 10~15명 적었다(9/27·9/28 리더보드 리플레이 18경기). 전투병은 1:1로 상쇄되므로 이 차이가 그대로 남는다
+MAX_FLAGS = 6
 BEHIND_EXTRA_FLAGS = 1  # 상대가 건물을 더 가지면 깃발병 최소 인원에 더한다
 
 # 점수를 모를 때의 기대값. 규칙: 신촌·안암 건물 1~2점, 중앙 건물 2~4점
@@ -225,7 +228,8 @@ def plan_warrior_tasks(t: Turn) -> None:
 
 
 def produce(t: Turn) -> None:
-    """생산: 깃발병(MIN_FLAGS까지) → 전투병(적 + 추가 인원까지) → 깃발병(점령 과제 수만큼) → 남으면 전투병.
+    """생산: 깃발병(MIN_FLAGS까지) → 전투병(적 + 추가 인원까지) → 깃발병(점령 과제 수만큼, 총원 MAX_FLAGS까지)
+    → 남으면 전투병.
     위치는 M4 병원 생산."""
     world, me, key = t.world, t.world.me, t.key
     budget = t.budget
@@ -234,7 +238,7 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = max(0, len(t.f_tasks) + SPARE_FLAGS - nf)
+    want_f = max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -806,7 +810,8 @@ TURN_TREE = Sequence(
         Act("점령 비용 예약", reserve_capture_cost),
     ),
     Act("전투병 과제 목록", plan_warrior_tasks),
-    Act("생산 (깃발병 최소 인원 → 전투병 목표 인원 → 점령 과제 수만큼 깃발병 → 남으면 전투병, 병원 위치 — 적 전투병이 닿는 병원은 깃발병만 피함)", produce),
+    Act(f"생산 (깃발병 최소 인원 → 전투병 목표 인원 → 점령 과제 수만큼 깃발병(총원 {MAX_FLAGS}명까지) → 남으면 전투병, "
+        "병원 위치 — 적 전투병이 닿는 병원은 깃발병만 피함)", produce),
     Sequence(
         "전투병",
         Act("과제 배정 (새로 만든 전투병 포함)", plan_warriors),

@@ -3,7 +3,7 @@
 - 날짜: 2026-09-28
 - 요청한 사람: 문원
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI
-- PR: (아직 없음, 브랜치 `moonwon/leaderboard-replays` — 다른 세션의 리플레이 정리 커밋과 한 PR)
+- PR: #46 (브랜치 `moonwon/leaderboard-replays` — 다른 세션의 리플레이 정리 커밋과 한 PR)
 
 ## 프롬프트 (원문 그대로)
 

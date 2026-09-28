@@ -183,11 +183,19 @@ def test_spawns_at_hospital_closer_to_targets():
     assert spawns and all(a.at == (10, 7) for a in spawns)
 
 
-def test_skips_hospital_that_enemy_warriors_can_reach():
+def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not():
+    # 깃발병은 적 전투병이 닿는 병원을 피해 본진에서, 전투병은 그 병원에서 만든다(1:1 상쇄라 손해가 없고 병원을 지킨다)
     w = world([building(0, (10, 7), "HOSPITAL", owner="Y", score=1), building(1, (12, 7), "LIBRARY")],
-              units={("K", "W", (10, 8)): 2}, gold=10)
-    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
-    assert spawns and all(a.at is None for a in spawns)
+              units={("K", "W", (10, 8)): 2}, gold=19)
+    spawns = {a.kind: a.at for a in strategy.decide(w) if isinstance(a, Spawn)}
+    assert spawns == {"F": None, "W": (10, 7)}
+
+
+def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
+    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (5, 5), owner="Y", score=1)],
+              units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
+    assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
 
 
 def test_distance_map_links_stations_with_cost_one():

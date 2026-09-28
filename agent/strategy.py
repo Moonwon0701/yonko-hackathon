@@ -42,7 +42,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from agent.algorithms import DEFAULT_ORDER, distance_map, manhattan, step_along, threat_map
+from agent.algorithms import DEFAULT_ORDER, distance_map, manhattan, max_assignment, step_along, threat_map
 from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,
@@ -440,30 +440,29 @@ def guard_tasks(t: Turn, weight: float) -> list[Task]:
 def assign_flags(
     flags: list[tuple[Pos, int]], tasks: list[Task], dist_to: Callable[[Pos], dict[Pos, int]],
 ) -> list[tuple[Pos, Task]]:
-    """깃발병 한 명씩 (칸, 점령 과제) 짝. 효용 = 가치 / (거리 + 남은 점령 단계 + ETA_OFFSET)이 큰 짝부터
-    탐욕적으로 고르고, 한 과제엔 한 명. 과제가 다 차면 남는 인원은 효용이 가장 높은 과제로 겹쳐 보낸다.
-    닿을 수 없으면 제자리.
+    """깃발병 한 명씩 (칸, 점령 과제) 짝. 효용 = 가치 / (거리 + 남은 점령 단계 + ETA_OFFSET).
+    한 과제엔 한 명씩, 효용 합이 가장 큰 짝을 한꺼번에 고른다(헝가리안, algorithms.max_assignment).
+    과제가 다 차서 남는 인원은 각자 효용이 가장 높은 과제로 겹쳐 보낸다. 닿을 수 없으면 제자리.
+
+    (예전에는 효용이 가장 큰 짝부터 하나씩 확정하는 탐욕 배정이었다. 서버 리플레이 매 턴 상태에서 선택지가 있는
+    배정의 약 30%가 최적과 달랐다 — docs/benchmarks.md)
     """
     dists = {task.pos: dist_to(task.pos) for task in tasks}
     pool = [pos for pos, n in flags for _ in range(n)]
-    free = list(tasks)
-    plan: list[tuple[Pos, Task]] = []
-    while pool:
-        best: tuple[float, int, Task] | None = None
-        for i, pos in enumerate(pool):
-            for task in free or tasks:
-                d = dists[task.pos].get(pos)
-                if d is None:
-                    continue
-                u = task.value / (d + task.stages + ETA_OFFSET)
-                if best is None or u > best[0]:
-                    best = (u, i, task)
-        if best is None:
-            break
-        _, i, task = best
-        plan.append((pool.pop(i), task))
-        if free:
-            free.remove(task)
+
+    def utility(pos: Pos, task: Task) -> float | None:
+        d = dists[task.pos].get(pos)
+        return None if d is None else task.value / (d + task.stages + ETA_OFFSET)
+
+    pairs = max_assignment([[utility(pos, task) for task in tasks] for pos in pool]) if tasks else []
+    plan = [(pool[i], tasks[j]) for i, j in pairs]
+    matched = {i for i, _ in pairs}
+    for i, pos in enumerate(pool):
+        if i in matched:
+            continue
+        reachable = [task for task in tasks if utility(pos, task) is not None]
+        if reachable:  # 효용이 같으면 앞의 과제
+            plan.append((pos, max(reachable, key=lambda task: utility(pos, task))))
     return plan
 
 

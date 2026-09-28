@@ -101,6 +101,9 @@ EVICT_WEIGHT = 1.0
 FRONT_COUNT = 3
 FRONT_MARGIN_WEIGHT = 0.5
 FRONT_NEED = 1  # 호위 없는 적 깃발병은 전투병 한 명으로 막힌다
+# 우리 전투병이 적보다 이만큼 이상 많을 때만 세운다. 늘 세우면 적 깃발병을 쫓을 전투병이 모자라 예전 봇 상대로
+# 떨어졌다(M4 72 → 62%, M3 96 → 87% — docs/benchmarks.md)
+FRONT_SURPLUS = 10
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -468,11 +471,13 @@ def evict_tasks(t: Turn) -> list[Task]:
 
 
 def frontline_tasks(t: Turn, weight: float) -> list[Task]:
-    """전선: 점령을 끝낸 우리 건물 중 노출 순위(front_rank)가 앞선 FRONT_COUNT곳에 전투병 FRONT_NEED명을 미리
-    세운다(가치 × weight). 적 깃발병이 다가온 뒤 움직이는 지키기와 달리 상대의 움직임을 기다리지 않는다.
-    지키기 과제가 있는 건물과 적 전투병이 EVICT_RADIUS 안에 온 건물은 뺀다(한 명으로는 못 지킨다 — 지키기·몰아내기·
-    처치가 맡는다)."""
+    """전선: 우리 전투병이 적보다 FRONT_SURPLUS명 이상 많으면, 점령을 끝낸 우리 건물 중 노출 순위(front_rank)가
+    앞선 FRONT_COUNT곳에 전투병 FRONT_NEED명을 미리 세운다(가치 × weight). 적 깃발병이 다가온 뒤 움직이는 지키기와
+    달리 상대의 움직임을 기다리지 않는다. 지키기 과제가 있는 건물과 적 전투병이 EVICT_RADIUS 안에 온 건물은 뺀다
+    (한 명으로는 못 지킨다 — 지키기·몰아내기·처치가 맡는다)."""
     world = t.world
+    if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + FRONT_SURPLUS:
+        return []
     guarded = {b.id for b, _ in t.pressured}
     ranked = []
     for b in world.owned(world.me):
@@ -763,7 +768,8 @@ def evict() -> Node:
 
 
 def frontline(weight: float) -> Node:
-    return enable(f"전선 과제: 노출 순위가 앞선 우리 건물 {FRONT_COUNT}곳에 전투병 {FRONT_NEED}명 (가치 ×{weight:g})",
+    return enable(f"전선 과제: 우리 전투병 ≥ 적 전투병 + {FRONT_SURPLUS}이면 노출 순위가 앞선 우리 건물 {FRONT_COUNT}곳에 "
+                  f"전투병 {FRONT_NEED}명 (가치 ×{weight:g})",
                   "W", lambda t: frontline_tasks(t, weight))
 
 

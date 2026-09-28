@@ -170,12 +170,21 @@ def test_frontline_warrior_waits_on_most_exposed_building(monkeypatch):
                building(2, (9, 7))],
               units={("Y", "W", (1, 7)): 1, ("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
     monkeypatch.setattr(strategy, "FRONT_COUNT", 1)
+    monkeypatch.setattr(strategy, "FRONT_SURPLUS", 1)  # 우리 2명 ≥ 적 1명 + 1
     t = strategy.Turn(w)
     strategy.read_situation(t)
     ranks = {b.pos: strategy.front_rank(w, b, t.dist_to(b.pos), t.others) for b in w.owned("Y")}
     assert ranks[(6, 7)] < ranks[(1, 7)]
     moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
     assert moves == [Move((1, 7), "W", 1, (2, 7))]
+
+
+def test_no_frontline_without_warrior_surplus():
+    # 우리 전투병이 적보다 FRONT_SURPLUS명 이상 많지 않으면 전선을 세우지 않는다: 앞쪽 건물 위 전투병도 목표로 간다
+    w = world([building(0, (6, 7), owner="Y", score=1), building(1, (9, 7))],
+              units={("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((6, 7), "W", 1, (7, 7))]
 
 
 def test_decide_stays_fast_with_huge_army():

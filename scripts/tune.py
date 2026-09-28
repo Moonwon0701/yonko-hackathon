@@ -64,6 +64,11 @@ GRID: dict[str, list] = {
     "ECON_EVICT_RADIUS": [2, 3, 4, 5],
     "ECON_WEIGHT": [1.0, 2.0, 3.0],
     "ECON_DEFEND_REACH": [1, 2, 3],
+    "RUSH_UNTIL": [0, 20, 40, 60],
+    "PICKET_VALUE": [0.0, 0.5, 1.0],
+    "RUSH_EXTRA": [1, 2, 3],
+    "RUSH_VALUE": [3.0, 6.0, 9.0],
+    "RUSH_CAPTURE": [1.0, 3.0, 5.0],
 }
 
 

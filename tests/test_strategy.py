@@ -311,3 +311,24 @@ def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce(monkeypatch):
     assert sum(m.count for m in moves if m.src == (7, 1)) == 15  # 10명은 역에서 기다리고 15명은 걷는다
     assert all(m.dst == (7, 2) for m in moves if m.src == (7, 1))
     assert not [m for m in moves if m.src == (6, 1) and m.dst == (7, 1)]
+
+
+def situation(w):
+    t = strategy.Turn(w)
+    strategy.read_situation(t)
+    return t
+
+
+def test_rush_targets_only_enemy_side_eng_until_rush_turn():
+    # 공학관 러시: 상대 본진(14,7)이 더 가까운 공학관에만 "위협 + RUSH_EXTRA"명, RUSH_UNTIL턴이 지나면 없다
+    buildings = [building(0, (11, 7), "ENG"), building(1, (3, 7), "ENG")]
+    tasks = strategy.rush_tasks(situation(world(buildings, turn=5)))
+    assert [(task.pos, task.need) for task in tasks] == [((11, 7), strategy.RUSH_EXTRA)]
+    assert strategy.rush_tasks(situation(world(buildings, turn=strategy.RUSH_UNTIL + 1))) == []
+
+
+def test_pickets_go_to_enemy_buildings_without_enemy_flags():
+    # 초소: 상대 건물마다 1명. 중립 건물과 적 깃발병이 선 상대 건물(처치 과제가 맡음)은 뺀다
+    buildings = [building(0, (10, 3), owner="K"), building(1, (10, 11), owner="K"), building(2, (7, 7), "PLAZA")]
+    t = situation(world(buildings, units={("K", "F", (10, 11)): 1}))
+    assert [(task.pos, task.need) for task in strategy.picket_tasks(t)] == [((10, 3), 1)]

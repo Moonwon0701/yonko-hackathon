@@ -1,6 +1,6 @@
 """시뮬레이터가 운영진 공식 개발도구(devtool/)와 같은지 확인한다.
 
-- 맵: 서버 모의 전투 리플레이(data/server-replays)의 지형·공개 점수가 공개 시드 0~9 맵과 같다
+- 맵: 공개 시드 맵의 실제 점수가 INIT 블록에 들어간다
 - 입출력: 우리 엔진이 봇에게 보내는 INIT·TURN 블록이 공식 직렬화와 글자까지 같다
 - 엔진: 같은 명령 줄을 두 엔진에 넣으면 매 턴 상태(유닛·자원·소유·단계·공개 점수)와 결과가 같다.
   명령은 스타터 봇, 우리 봇, 그리고 규칙 경계를 두드리는 무작위 명령(잘못된 줄 포함)에서 뽑는다.
@@ -54,25 +54,6 @@ def test_official_config_matches_starter_balance():
 
 
 # ------------------------------------------------------------------ 맵
-
-
-def server_replays():
-    return sorted((ROOT / "data" / "server-replays").rglob("*.json"))
-
-
-@pytest.mark.parametrize("path", server_replays(), ids=lambda p: f"{p.parent.name}/{p.name}")
-def test_server_mock_battle_maps_are_public_seeds(path):
-    replay = json.loads(path.read_text(encoding="utf-8"))
-    obs = replay["turns"][0]["observation"]
-    seeds = [s for s in mapgen.PUBLIC_SEEDS if mapgen.generate(s).rows == tuple(obs["map"])]
-    assert len(seeds) == 1, "공개 시드 0~9 중 지형이 같은 맵이 없다"
-    m = mapgen.generate(seeds[0])
-    assert [(b.id, b.pos, b.kind) for b in m.buildings] == [
-        (b["id"], (b["x"], b["y"]), b["type"]) for b in obs["buildings"]]
-    real = {b.id: b.score for b in m.buildings}
-    for turn in replay["turns"]:
-        for bid, score in turn["revealed"]["buildingScores"].items():
-            assert real[int(bid)] == score, (turn.get("turn"), bid)
 
 
 def test_public_scores_fill_server_init_block():

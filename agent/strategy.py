@@ -44,7 +44,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 
-from agent.algorithms import DEFAULT_ORDER, distance_map, manhattan, max_assignment, step_along, threat_map
+from agent.algorithms import (
+    DEFAULT_ORDER,
+    distance_map,
+    manhattan,
+    max_assignment,
+    step_along,
+    threat_map,
+)
 from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,

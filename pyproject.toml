@@ -24,6 +24,8 @@ packages = ["agent"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# sim/ 은 설치 패키지가 아니라서, 그냥 `pytest`로 돌려도 찾도록 저장소 루트를 경로에 넣는다
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100

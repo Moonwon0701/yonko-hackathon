@@ -39,6 +39,26 @@
 팀 전원이 Windows이므로 **PowerShell 기준**으로 적습니다. Git Bash나 macOS·Linux는 아래
 "다른 셸을 쓴다면"을 보세요.
 
+### 먼저 설치할 것
+
+| 프로그램 | 받는 곳 | 설치할 때 |
+| --- | --- | --- |
+| Python **3.12** | <https://www.python.org/downloads/windows/> 에서 3.12.x의 "Windows installer (64-bit)" | 첫 화면의 **"py launcher"** 체크를 켜 둔 채로(기본값) 설치. 3.13·3.14가 아니라 3.12 |
+| Git | <https://git-scm.com/download/win> | 기본값 그대로 설치 |
+
+Microsoft Store의 Python, VS Code의 Python 확장, GitHub Desktop으로는 대신할 수 없습니다.
+VS Code Python 확장은 파이썬을 설치하지 않고 이미 설치된 것을 찾아 쓰기만 하고, GitHub Desktop은 자기 안에만
+Git을 넣어 둬서 터미널에서 `git` 명령이 안 됩니다. 둘 다 위 설치를 마친 뒤 **추가로** 쓰는 것은 괜찮습니다.
+
+설치 후 **새 PowerShell 창**을 열고 확인합니다.
+
+```powershell
+py -0p          # -V:3.12 줄이 보여야 한다
+git --version
+```
+
+### 저장소 받고 환경 만들기
+
 ```powershell
 git clone https://github.com/Moonwon0701/yonko-hackathon.git
 cd yonko-hackathon
@@ -52,11 +72,14 @@ pip install -e ".[dev]"       # agent 패키지 + 개발 도구(pytest, ruff) �
 
 ```powershell
 python -c "import agent; print('ok')"
-pytest                        # 784개 통과 + 1개 실패가 현재 정상 (아래 참고)
+pytest                        # 실패 1개만 나오면 현재 정상 (아래 참고)
+ruff check .                  # All checks passed!
 ```
 
 실패하는 1개는 `tests/test_official.py::test_devtool_is_unmodified`입니다. `.gitignore`의 `dist/` 줄이
 `devtool/bots/dist/`까지 무시해서 그 파일들이 저장소에 없기 때문이고, 봇 동작과는 관계없습니다.
+이 파일들을 추가하는 커밋이 `main`에 들어오면 전부 통과합니다. 그 밖의 실패나 `ERROR ... collecting`이
+나오면 설치가 잘못된 것이니 팀 채팅에 에러 전문을 올리세요.
 
 ### python 대신 py를 쓰는 이유
 

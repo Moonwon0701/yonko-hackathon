@@ -4,6 +4,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# 공식 개발도구 원본의 일부라 추적한다 / part of the official dev tool, keep it
+!devtool/bots/dist/
 
 # Virtual environments / 가상환경
 .venv/

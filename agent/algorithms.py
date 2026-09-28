@@ -104,3 +104,50 @@ def step_along(
             if pos != start and dist.get(pos) == here - 1:
                 return pos
     return None
+
+
+def max_assignment(utility: Sequence[Sequence[float | None]]) -> list[tuple[int, int]]:
+    """한 행에 한 열, 한 열에 한 행씩 짝지어 효용 합이 가장 큰 짝 목록 (헝가리안 방법, O(n²m)).
+
+    `utility[i][j]`가 None이면 그 짝은 맺을 수 없다. 효용은 0 이상이어야 한다(맺을 수 없는 짝은 효용 0으로 풀고
+    마지막에 버린다). 행과 열 수가 달라도 되며, 짝을 못 받는 행·열은 결과에 없다. 돌려주는 값은 행 번호 순.
+    """
+    rows = [list(r) for r in utility]
+    if not rows or not rows[0]:
+        return []
+    flip = len(rows) > len(rows[0])
+    if flip:  # 행이 열보다 많으면 뒤집어 푼다 (알고리즘은 행 ≤ 열을 가정)
+        rows = [list(c) for c in zip(*rows)]
+    n, m = len(rows), len(rows[0])
+    cost = [[-(u or 0.0) for u in r] for r in rows]  # 최대화 → 최소화
+    inf = float("inf")
+    pu, pv = [0.0] * (n + 1), [0.0] * (m + 1)  # 행·열 퍼텐셜 (1부터, 0은 가상 열)
+    match, way = [0] * (m + 1), [0] * (m + 1)  # match[j] = j열의 행 (1부터, 0 = 없음)
+    for i in range(1, n + 1):
+        match[0], j0 = i, 0
+        minv, used = [inf] * (m + 1), [False] * (m + 1)
+        while match[j0]:  # i행을 넣는 증가 경로를 찾는다
+            used[j0] = True
+            i0, delta, j1 = match[j0], inf, 0
+            for j in range(1, m + 1):
+                if not used[j]:
+                    cur = cost[i0 - 1][j - 1] - pu[i0] - pv[j]
+                    if cur < minv[j]:
+                        minv[j], way[j] = cur, j0
+                    if minv[j] < delta:
+                        delta, j1 = minv[j], j
+            for j in range(m + 1):
+                if used[j]:
+                    pu[match[j]] += delta
+                    pv[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+        while j0:  # 경로를 따라 짝을 바꾼다
+            j1 = way[j0]
+            match[j0] = match[j1]
+            j0 = j1
+    pairs = [(match[j] - 1, j - 1) for j in range(1, m + 1) if match[j]]
+    if flip:
+        pairs = [(j, i) for i, j in pairs]
+    return sorted((i, j) for i, j in pairs if utility[i][j] is not None)

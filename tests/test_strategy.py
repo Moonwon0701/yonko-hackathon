@@ -63,6 +63,28 @@ def test_more_flags_first_when_enemy_owns_more_buildings():
     assert spawns == [Spawn("F", 3)]
 
 
+def test_max_assignment_beats_greedy_pick():
+    from agent.algorithms import max_assignment
+    # 탐욕이면 가장 큰 10(0→0)을 먼저 잡아 합 11. 최적은 0→1, 1→0으로 합 17
+    assert max_assignment([[10, 9], [8, 1]]) == [(0, 1), (1, 0)]
+
+
+def test_max_assignment_skips_blocked_pairs_and_extra_rows():
+    from agent.algorithms import max_assignment
+    assert max_assignment([[None, 2], [3, None], [1, 1]]) == [(0, 1), (1, 0)]
+    assert max_assignment([[None]]) == []
+    assert max_assignment([]) == []
+
+
+def test_flags_take_assignment_with_best_total_utility():
+    # 깃발병 (5,5)는 두 건물에 똑같이 가깝고, (5,9)는 아래 건물에만 가깝다. 탐욕 배정은 (5,5)가 점수 높은 아래
+    # 건물을 먼저 잡아 (5,9)를 먼 위 건물로 보냈다. 최적 배정: (5,5) → 위, (5,9) → 아래
+    w = world([building(0, (5, 3), "LIBRARY", score=1), building(1, (5, 7), "LIBRARY", score=2)],
+              units={("Y", "F", (5, 5)): 1, ("Y", "F", (5, 9)): 1}, gold=0)
+    moves = {(m.src, m.dst) for m in strategy.decide(w) if isinstance(m, Move) and m.kind == "F"}
+    assert moves == {((5, 5), (5, 4)), ((5, 9), (5, 8))}
+
+
 def test_priority_orders_simultaneous_captures_by_value():
     w = world([building(0, (3, 3), "LIBRARY", score=1), building(1, (5, 5), "WATCH", score=4)],
               units={("Y", "F", (3, 3)): 1, ("Y", "F", (5, 5)): 1}, gold=0)

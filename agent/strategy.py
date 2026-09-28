@@ -35,6 +35,9 @@ M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 �
 - 지키기 과제: 적 깃발병이 GUARD_RADIUS 안에 있는 우리 건물에 전투병을 세운다(가치 × 국면별 배수).
 - 몰아내기 과제: 적 전투병이 EVICT_RADIUS 안에 온 우리 핵심 건물(학생회관·공학관·병원)에 전투병을 세운다.
   적이 전투병을 먼저 모아 두고 깃발병을 나중에 들이는 경우를 막는다(9/28 리더보드 패배 분석).
+
+현진 테마 브랜치(hyunjin/defense-econ) — 별동대 과제: 위험한 목표(상대 소유이거나 적 전투병이 닿는 건물)로 가는 깃발병
+1명(SECOND_SQUAD_TURN부터 2명)의 다음 칸에 전투병 SQUAD_SIZE명을 먼저 보내, 가는 길에서도 깃발병과 함께 움직인다.
 """
 
 from __future__ import annotations
@@ -119,6 +122,12 @@ FRONT_SURPLUS = 10
 RAID_KINDS = {"ENG", "HALL"}
 RAID_STEAL = 2.0  # 상대 경제 건물의 점령 가치에 더 곱하는 값
 RAID_SURPLUS = -99  # 우리 전투병이 적 전투병 + 이 값 이상일 때만 급습한다
+# 별동대(현진 테마 브랜치): 위험한 목표(상대 소유이거나 적 전투병이 닿는 건물)로 가는 깃발병에 전투병을 붙여, 가는 길의
+# 다음 칸을 먼저 차지한다(호위는 점령을 시작한 뒤에만 붙는다). main 상대 시드 0~99 75%, 흉내 봇 풀 평균 55 → 62%(2개).
+# 인원 1·2·3 / 가중치 3, 2개 시작 1·60·100턴도 비교했다 (docs/benchmarks.md, docs/llm-log/2026-09-2*-hyunjin-*)
+SQUAD_SIZE = 5
+SQUAD_WEIGHT = 1.0
+SECOND_SQUAD_TURN = 30  # 이 턴부터 별동대 2개 (목표 건물이 서로 다른 깃발병 2명)
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -531,6 +540,31 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]
 
 
+def squad_tasks(t: Turn) -> list[Task]:
+    """별동대: 위험한 목표(상대 소유이거나 적 전투병이 닿는 건물)로 가는 깃발병을 과제 가치 순(동점이면 정규화 좌표 순)으로,
+    목표 건물이 겹치지 않게 1명(SECOND_SQUAD_TURN부터 2명) 골라, 그 깃발병이 이번 턴 들어갈 칸(목표 쪽 한 칸, 목표 위면
+    목표)에 전투병 SQUAD_SIZE명을 보낸다(점령 과제 가치 × SQUAD_WEIGHT). 전투병이 그 칸을 먼저 차지하므로 깃발병의 안전
+    판단(적 위협 ≤ 우리 전투병)이 통과되어 가는 길에서도 함께 움직인다. 깃발병 배정은 깃발병 1차와 같은 입력으로 다시 구한다."""
+    world = t.world
+    count = 2 if world.turn >= SECOND_SQUAD_TURN else 1
+    cands = []
+    for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to):
+        b = task.building
+        if b.owner == world.enemy or t.threat.get(b.pos, 0):
+            cands.append((-task.value, t.key(pos), pos, task))
+    cands.sort(key=lambda c: c[:2])
+    tasks, taken = [], set()
+    for *_, pos, task in cands:
+        if len(tasks) == count:
+            break
+        if task.building.id in taken:
+            continue
+        taken.add(task.building.id)
+        cell = step_along(pos, t.dist_to(task.pos), t.order) or pos
+        tasks.append(Task("별동대", "W", cell, SQUAD_SIZE, task.value * SQUAD_WEIGHT))
+    return tasks
+
+
 # ------------------------------------------------------------------ 깃발병
 
 
@@ -818,6 +852,11 @@ def raid(weight: float) -> Node:
                   "W", lambda t: raid_tasks(t, weight))
 
 
+def squad() -> Node:
+    return enable(f"별동대 과제: 위험한 목표로 가는 깃발병 1명({SECOND_SQUAD_TURN}턴부터 2명)의 다음 칸에 전투병 {SQUAD_SIZE}명",
+                  "W", squad_tasks)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -826,19 +865,19 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), warriors(2),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), warriors(1),
     ),
 )
 

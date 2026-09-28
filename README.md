@@ -213,10 +213,13 @@ Git Bash의 `tar`는 ZIP이 아니라 tar 파일을 만듭니다. 둘 다 서버
 
 **테마 브랜치(성혁·현진)는 이렇게 합니다.**
 
-1. `git checkout 내-테마-브랜치` 후 `git pull` — 내 브랜치의 최신 상태를 받는다.
-2. `git merge main` — `main`에 들어온 공용 수정을 받는다(바뀐 게 없으면 아무 일도 없다).
-3. 작업하고 `git add` → `git commit`.
-4. `git push` — PR은 만들지 않는다. 팀 채팅에 무엇을 바꿨는지 한 줄 알린다.
+1. `git checkout main` 후 `git pull` — 내 컴퓨터의 `main`을 최신으로 만든다. `git merge main`은 GitHub이
+   아니라 **내 컴퓨터의 `main`**을 합치므로, 이 단계를 빼면 새 공용 수정이 들어오지 않는다.
+2. `git checkout 내-테마-브랜치` 후 `git pull` — 내 브랜치의 최신 상태를 받는다.
+3. `git merge main` — `main`에 들어온 공용 수정을 내 브랜치로 가져온다. 내 브랜치의 작업은 그대로 남고
+   `main`은 바뀌지 않는다(바뀐 게 없으면 아무 일도 없다). 충돌이 나면 멈추고 팀 채팅에 알린다.
+4. 작업하고 `git add` → `git commit`.
+5. `git push` — PR은 만들지 않는다. 팀 채팅에 무엇을 바꿨는지 한 줄 알린다.
 
 ## 개발 규칙 요약
 

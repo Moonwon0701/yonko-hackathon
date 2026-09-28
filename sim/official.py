@@ -4,8 +4,8 @@ devtool/은 운영진이 2026-09-27에 배포한 dev_tool.zip을 그대로 푼 �
 공식 코드는 `engine`, `mapgen` 같은 최상위 패키지 이름을 쓰므로, sys.path에 devtool/을 넣는 일을
 여기서만 한다. sim의 다른 모듈은 이 파일의 함수만 쓴다.
 
-- 맵: 공식 mapgen으로 만든다. 서버 모의 전투 맵은 공개 시드 0~9와 지형·점수가 똑같다
-  (tests/test_official.py가 data/server-replays로 확인한다).
+- 맵: 공식 mapgen으로 만든다. 서버 모의 전투 맵은 공개 시드 0~9와 지형·점수가 똑같았다(9/27 확인).
+  리더보드·최종 평가는 매 경기 랜덤 시드 맵이다.
 - 엔진: sim/engine.py가 공식 engine과 매 턴 같은 상태를 내는지 tests/test_official.py가 비교한다.
   sim은 뷰어용 명령 처리 결과(무시·일부 처리 사유)가 필요해 우리 엔진으로 경기를 돌린다.
 """

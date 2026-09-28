@@ -63,6 +63,14 @@ def test_more_flags_first_when_enemy_owns_more_buildings():
     assert spawns == [Spawn("F", 3)]
 
 
+def test_flags_stop_at_max_flags_even_with_many_targets(monkeypatch):
+    # 목표 건물이 10개여도 깃발병은 MAX_FLAGS명까지만: 남는 자원은 전투병으로 (상한이 없으면 깃발병 5명을 더 만든다)
+    monkeypatch.setattr(strategy, "MAX_FLAGS", 6)
+    w = world([building(i, (3 + i, 3)) for i in range(10)], units={("Y", "F", (0, 7)): 6}, gold=40)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("W", 13)]
+
+
 def test_max_assignment_beats_greedy_pick():
     from agent.algorithms import max_assignment
     # 탐욕이면 가장 큰 10(0→0)을 먼저 잡아 합 11. 최적은 0→1, 1→0으로 합 17
@@ -207,6 +215,14 @@ def test_no_frontline_without_warrior_surplus():
               units={("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
     moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
     assert moves == [Move((6, 7), "W", 1, (7, 7))]
+
+
+def test_warrior_raids_enemy_engineering_hall_over_closer_neutral():
+    # 과제 없는 전투병은 가까운 중립 도서관(5,5)으로 가지만, 급습 과제가 있으면 상대 공학관(8,7)으로 간다
+    w = world([building(0, (5, 5), "LIBRARY"), building(1, (8, 7), "ENG", owner="K", score=1)],
+              units={("Y", "W", (5, 7)): 1}, gold=0)
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((5, 7), "W", 1, (6, 7))]
 
 
 def test_decide_stays_fast_with_huge_army():

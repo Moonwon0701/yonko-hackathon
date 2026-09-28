@@ -1,5 +1,6 @@
 """서버 리플레이(data/server-replays)에서 뽑은 맵이 규칙서 1장 조건을 지키고, 시뮬레이터에서 한 판이 끝까지 돌아가는지."""
 
+import json
 import sys
 from collections import deque
 from pathlib import Path
@@ -16,8 +17,11 @@ sys.path.insert(0, str(ROOT / "starter"))
 
 
 def test_same_terrain_replays_become_one_map():
-    # 2026-09-27 모의 전투: 중·상 봇 19경기가 같은 10개 맵을 썼다
-    assert len(SERVER_MAPS) == 10
+    # 모의 전투는 고정 시드라 여러 경기가 한 맵을 다시 쓰고(19경기 → 10개 맵),
+    # 리더보드는 매 경기 랜덤 시드라 경기마다 맵이 다르다
+    terrains = {"".join(json.loads(p.read_text(encoding="utf-8"))["turns"][0]["observation"]["map"])
+                for p in REPLAYS.rglob("*.json")}
+    assert len(SERVER_MAPS) == len(terrains)
 
 
 @pytest.mark.parametrize(("name", "spec"), SERVER_MAPS, ids=[n for n, _ in SERVER_MAPS])

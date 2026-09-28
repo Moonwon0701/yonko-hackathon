@@ -627,30 +627,42 @@ def assign_warriors(
     """과제마다 가장 가까운 전투병 `need`명을 붙인다. 가치 / (1 + 가장 먼 전투병의 거리)가 큰 과제부터.
 
     돌려주는 값: (전투병 칸, 목표 칸) 목록, 과제를 못 받은 전투병 칸 목록, 과제 칸 → 전원 도착까지 턴 수.
+
+    전투병은 칸 단위 [칸, 인원]으로 다룬다. 한 명씩 펼쳐 정렬하면 전투병 수에 비례해 느려져, 9/28 22:00
+    리더보드에서 전투병 540명일 때 서버 응답이 274 ms(제한 300 ms)까지 갔다. 같은 칸은 거리가 같으므로
+    칸 순서로 동점을 가르면 한 명씩 고르던 때와 같은 전투병을 같은 순서로 고른다.
     """
-    pool = [pos for pos, n in warriors for _ in range(n)]
+    cells = [[pos, n] for pos, n in warriors if n > 0]
     plan: list[tuple[Pos, Pos]] = []
     arrival: dict[Pos, int] = {}
     remaining = list(tasks)
-    while remaining and pool:
-        best: tuple[float, Task, list[tuple[int, int]]] | None = None
+    while remaining and cells:
+        best: tuple[float, Task, list[tuple[int, int, int]]] | None = None
         for task in remaining:
             dist = dist_to(task.pos)
-            near = sorted((dist[p], i) for i, p in enumerate(pool) if p in dist)
-            if len(near) < task.need:
+            chosen: list[tuple[int, int, int]] = []  # (거리, 칸 순서, 데려갈 인원)
+            got = 0
+            for d, i in sorted((dist[c[0]], i) for i, c in enumerate(cells) if c[0] in dist):
+                take = min(cells[i][1], task.need - got)
+                chosen.append((d, i, take))
+                got += take
+                if got == task.need:
+                    break
+            if got < task.need:
                 continue
-            chosen = near[:task.need]
             score = task.value / (1 + chosen[-1][0])
             if best is None or score > best[0]:
                 best = (score, task, chosen)
         if best is None:
             break
         _, task, chosen = best
-        for _, i in sorted(chosen, key=lambda c: -c[1]):
-            plan.append((pool.pop(i), task.pos))
+        for _, i, take in sorted(chosen, key=lambda c: -c[1]):
+            plan += [(cells[i][0], task.pos)] * take
+            cells[i][1] -= take
+        cells = [c for c in cells if c[1] > 0]
         arrival[task.pos] = chosen[-1][0]
         remaining.remove(task)
-    return plan, pool, arrival
+    return plan, [pos for pos, n in cells for _ in range(n)], arrival
 
 
 def pick_jump(jumps: Counter[tuple[Pos, Pos]], key: Callable[[Pos], Pos]) -> tuple[Pos, Pos] | None:

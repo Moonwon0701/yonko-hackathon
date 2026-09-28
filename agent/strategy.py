@@ -33,6 +33,8 @@ M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 �
 - 국면 유지(Latch 노드): 더 급한 국면으로는 바로 바꾸고, 덜 급한 국면으로는 지금 국면의 조건이 HOLD_TURNS턴
   연속 풀렸을 때만 내려간다(국면이 턴마다 흔들리지 않게).
 - 지키기 과제: 적 깃발병이 GUARD_RADIUS 안에 있는 우리 건물에 전투병을 세운다(가치 × 국면별 배수).
+- 몰아내기 과제: 적 전투병이 EVICT_RADIUS 안에 온 우리 핵심 건물(학생회관·공학관·병원)에 전투병을 세운다.
+  적이 전투병을 먼저 모아 두고 깃발병을 나중에 들이는 경우를 막는다(9/28 리더보드 패배 분석).
 """
 
 from __future__ import annotations
@@ -63,6 +65,7 @@ from agent.world import (
 MIN_WARRIORS = 3  # 전투병 최소 인원 (적 전투병이 적어도 이만큼은 둔다)
 SPARE_FLAGS = 1  # 목표 건물 수보다 이만큼 더 많은 깃발병까지만 만든다
 MIN_FLAGS = 2  # 깃발병이 이보다 적으면 전투병보다 먼저 만든다 (목표가 있을 때만)
+BEHIND_EXTRA_FLAGS = 1  # 상대가 건물을 더 가지면 깃발병 최소 인원에 더한다
 
 # 점수를 모를 때의 기대값. 규칙: 신촌·안암 건물 1~2점, 중앙 건물 2~4점
 SIDE_SCORE_GUESS = 1.5
@@ -88,6 +91,19 @@ GUARD_RADIUS = 3  # 적 깃발병이 이 거리 안에 있는 우리 건물은 �
 THREAT_PRESSURE = 2.0  # 위협받는 우리 건물의 추정 점수 합이 이 이상이면 위협 대응
 LATE_TURN = 110  # 굳히기: 이 턴 이후 추정 점수가 앞서면
 ATTACK_MARGIN = 2  # 공격: 우리 전투병이 적보다 이만큼 많으면
+# 몰아내기: 적 전투병이 이 거리 안에 온 우리 핵심 건물에 전투병을 세운다. 적 깃발병만 보던 지키기로는 적이 전투병을
+# 먼저 건물 위·옆에 모아 두고 깃발병을 나중에 들이는 경우를 못 막았다(9/28 리더보드 패배 4경기 중 3경기)
+EVICT_KINDS = {"HALL", "ENG", "HOSPITAL"}
+EVICT_RADIUS = 2
+EVICT_WEIGHT = 1.0
+# 전선: 적이 오기 전에, 점령을 끝낸 우리 건물 중 가장 노출된 곳에 전투병을 미리 세운다.
+# 노출 순위 = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리). 작을수록 전선
+FRONT_COUNT = 3
+FRONT_MARGIN_WEIGHT = 0.5
+FRONT_NEED = 1  # 호위 없는 적 깃발병은 전투병 한 명으로 막힌다
+# 우리 전투병이 적보다 이만큼 이상 많을 때만 세운다. 늘 세우면 적 깃발병을 쫓을 전투병이 모자라 예전 봇 상대로
+# 떨어졌다(M4 72 → 62%, M3 96 → 87% — docs/benchmarks.md)
+FRONT_SURPLUS = 10
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -222,7 +238,11 @@ def produce(t: Turn) -> None:
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
-    make_f = min(want_f, max(0, MIN_FLAGS - nf), budget // fc)
+    # 건물이 밀리면 최소 인원을 늘린다: 적 전투병이 훨씬 많으면 전투병 목표를 끝내 못 채워, 깃발병이 최소 인원에
+    # 묶인 채 건물을 되찾지 못했다(9/28 리더보드 패배 28·29: 20턴 이후 깃발병 2명 이하 81·75턴)
+    behind = len(world.owned(world.enemy)) > len(world.owned(me))
+    min_f = MIN_FLAGS + (BEHIND_EXTRA_FLAGS if behind else 0)
+    make_f = min(want_f, max(0, min_f - nf), budget // fc)
     budget -= make_f * fc
     make_w = min(max(0, want_w - nw), budget // wc)
     budget -= make_w * wc
@@ -235,7 +255,9 @@ def produce(t: Turn) -> None:
     # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
     passable = world.map.passable
     sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
-    t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in t.w_tasks}, passable), t.threat)
+    # 전투병은 위협받는 병원에서도 만든다: 전투병끼리는 1:1로 상쇄되어 손해가 없고, 그 자리에서 병원을 지킨다.
+    # (위협받는 병원을 빼던 때는 적이 다가오는 턴마다 먼 본진에서 생산했다 — 9/28 리더보드 패배 3경기에서 22~27턴)
+    t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in t.w_tasks}, passable), {})
     t.f_site = spawn_site(sites, distance_map({task.pos for task in t.f_tasks}, passable), t.threat)
     if make_w:
         t.actions.append(Spawn("W", make_w, None if t.w_site == sites[0] else t.w_site))
@@ -434,6 +456,52 @@ def guard_tasks(t: Turn, weight: float) -> list[Task]:
     return [Task("지키기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight) for b, _ in t.pressured]
 
 
+def evict_tasks(t: Turn) -> list[Task]:
+    """몰아내기: 적 전투병이 EVICT_RADIUS 안에 온 우리 핵심 건물(EVICT_KINDS) 위에 전투병을 세운다. 건물 위의 적
+    전투병은 이겨서 몰아내고, 옆의 적은 올라오지 못하게 한다. 지키기 과제가 이미 있는 건물은 뺀다."""
+    guarded = {b.id for b, _ in t.pressured}
+    tasks = []
+    for b in t.world.owned(t.world.me):
+        if b.kind not in EVICT_KINDS or b.id in guarded:
+            continue
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
+            tasks.append(Task("몰아내기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * EVICT_WEIGHT))
+    return tasks
+
+
+def frontline_tasks(t: Turn, weight: float) -> list[Task]:
+    """전선: 우리 전투병이 적보다 FRONT_SURPLUS명 이상 많으면, 점령을 끝낸 우리 건물 중 노출 순위(front_rank)가
+    앞선 FRONT_COUNT곳에 전투병 FRONT_NEED명을 미리 세운다(가치 × weight). 적 깃발병이 다가온 뒤 움직이는 지키기와
+    달리 상대의 움직임을 기다리지 않는다. 지키기 과제가 있는 건물과 적 전투병이 EVICT_RADIUS 안에 온 건물은 뺀다
+    (한 명으로는 못 지킨다 — 지키기·몰아내기·처치가 맡는다)."""
+    world = t.world
+    if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + FRONT_SURPLUS:
+        return []
+    guarded = {b.id for b, _ in t.pressured}
+    ranked = []
+    for b in world.owned(world.me):
+        if b.id in guarded:
+            continue
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
+            continue
+        ranked.append((front_rank(world, b, dist, t.others), t.key(b.pos), b))
+    ranked.sort(key=lambda r: r[:2])
+    return [Task("전선", "W", b.pos, FRONT_NEED, t.values[b.id] * weight) for *_, b in ranked[:FRONT_COUNT]]
+
+
+def front_rank(world: World, b: Building, dist: dict[Pos, int], others: list[Building]) -> float:
+    """우리 건물 `b`의 노출 순위(작을수록 전선). `dist`는 `b`에서 각 칸까지의 거리, `others`는 우리 것이 아닌 건물.
+    = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리).
+    앞 항은 지금 맞닿은 경계, 뒤 항은 진영(상대 쪽으로 나가 있을수록 작다)."""
+    far = world.map.width + world.map.height
+    front = min((dist[o.pos] for o in others if o.pos in dist), default=far)
+    bases = world.map.bases
+    margin = dist.get(bases[world.enemy], far) - dist.get(bases[world.me], far)
+    return front + FRONT_MARGIN_WEIGHT * margin
+
+
 # ------------------------------------------------------------------ 깃발병
 
 
@@ -564,8 +632,8 @@ def pick_jump(jumps: Counter[tuple[Pos, Pos]], key: Callable[[Pos], Pos]) -> tup
 
 
 def spawn_site(sites: list[Pos], goal_dist: dict[Pos, int], threat: dict[Pos, int]) -> Pos:
-    """생산할 칸. `sites[0]`은 본진, 나머지는 우리 병원. 적 전투병이 닿는 병원은 빼고(새 유닛이 바로 잡힌다),
-    목표까지 가장 가까운 곳. 거리가 같으면 앞의 것(본진)."""
+    """생산할 칸. `sites[0]`은 본진, 나머지는 우리 병원. `threat`에서 적 전투병이 닿는 병원은 빼고(새 깃발병이 바로
+    잡힌다. 전투병은 빈 위협 맵을 넘겨 빼지 않는다), 목표까지 가장 가까운 곳. 거리가 같으면 앞의 것(본진)."""
     usable = [s for i, s in enumerate(sites) if i == 0 or not threat.get(s, 0)]
     return min(usable, key=lambda s: goal_dist.get(s, 10**6))
 
@@ -693,6 +761,17 @@ def guard(weight: float) -> Node:
                   "W", lambda t: guard_tasks(t, weight))
 
 
+def evict() -> Node:
+    return enable(f"몰아내기 과제: 적 전투병이 {EVICT_RADIUS}칸 안에 온 우리 핵심 건물 ({'·'.join(sorted(EVICT_KINDS))})",
+                  "W", evict_tasks)
+
+
+def frontline(weight: float) -> Node:
+    return enable(f"전선 과제: 우리 전투병 ≥ 적 전투병 + {FRONT_SURPLUS}이면 노출 순위가 앞선 우리 건물 {FRONT_COUNT}곳에 "
+                  f"전투병 {FRONT_NEED}명 (가치 ×{weight:g})",
+                  "W", lambda t: frontline_tasks(t, weight))
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -701,19 +780,19 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), warriors(2),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), warriors(1),
     ),
 )
 
@@ -727,7 +806,7 @@ TURN_TREE = Sequence(
         Act("점령 비용 예약", reserve_capture_cost),
     ),
     Act("전투병 과제 목록", plan_warrior_tasks),
-    Act("생산 (깃발병 최소 인원 → 전투병 목표 인원 → 점령 과제 수만큼 깃발병 → 남으면 전투병, 병원 위치)", produce),
+    Act("생산 (깃발병 최소 인원 → 전투병 목표 인원 → 점령 과제 수만큼 깃발병 → 남으면 전투병, 병원 위치 — 적 전투병이 닿는 병원은 깃발병만 피함)", produce),
     Sequence(
         "전투병",
         Act("과제 배정 (새로 만든 전투병 포함)", plan_warriors),

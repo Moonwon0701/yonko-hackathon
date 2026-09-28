@@ -55,6 +55,14 @@ def test_flags_come_before_warriors_when_below_minimum():
     assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
+def test_more_flags_first_when_enemy_owns_more_buildings():
+    # 상대가 건물을 더 가지면 깃발병 최소 인원이 하나 늘어난다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (3, 7), owner="K"), building(1, (5, 3), owner="K")],
+              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=17)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("F", 3)]
+
+
 def test_max_assignment_beats_greedy_pick():
     from agent.algorithms import max_assignment
     # 탐욕이면 가장 큰 10(0→0)을 먼저 잡아 합 11. 최적은 0→1, 1→0으로 합 17
@@ -177,6 +185,30 @@ def test_warrior_guards_our_building_when_enemy_flag_approaches():
     assert not [a for a in actions if isinstance(a, Move) and a.kind == "W"]
 
 
+def test_frontline_warrior_waits_on_most_exposed_building(monkeypatch):
+    # 적이 아직 오지 않아도 앞쪽 건물(6,7)을 지킨다: 그 위의 전투병은 중립 건물(9,7) 쪽으로 가지 않고 남고,
+    # 뒤쪽 건물(1,7) 위의 전투병은 과제가 없어 앞으로 나간다. (전선 과제가 없으면 둘 다 (9,7) 쪽으로 간다)
+    w = world([building(0, (1, 7), owner="Y", score=1), building(1, (6, 7), owner="Y", score=1),
+               building(2, (9, 7))],
+              units={("Y", "W", (1, 7)): 1, ("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
+    monkeypatch.setattr(strategy, "FRONT_COUNT", 1)
+    monkeypatch.setattr(strategy, "FRONT_SURPLUS", 1)  # 우리 2명 ≥ 적 1명 + 1
+    t = strategy.Turn(w)
+    strategy.read_situation(t)
+    ranks = {b.pos: strategy.front_rank(w, b, t.dist_to(b.pos), t.others) for b in w.owned("Y")}
+    assert ranks[(6, 7)] < ranks[(1, 7)]
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((1, 7), "W", 1, (2, 7))]
+
+
+def test_no_frontline_without_warrior_surplus():
+    # 우리 전투병이 적보다 FRONT_SURPLUS명 이상 많지 않으면 전선을 세우지 않는다: 앞쪽 건물 위 전투병도 목표로 간다
+    w = world([building(0, (6, 7), owner="Y", score=1), building(1, (9, 7))],
+              units={("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((6, 7), "W", 1, (7, 7))]
+
+
 def test_decide_stays_fast_with_huge_army():
     """전투병이 수백 명이어도 계산이 유닛 수에 비례해 늘지 않아야 한다 (서버는 로컬보다 약 12배 느리다).
 
@@ -205,11 +237,19 @@ def test_spawns_at_hospital_closer_to_targets():
     assert spawns and all(a.at == (10, 7) for a in spawns)
 
 
-def test_skips_hospital_that_enemy_warriors_can_reach():
+def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not():
+    # 깃발병은 적 전투병이 닿는 병원을 피해 본진에서, 전투병은 그 병원에서 만든다(1:1 상쇄라 손해가 없고 병원을 지킨다)
     w = world([building(0, (10, 7), "HOSPITAL", owner="Y", score=1), building(1, (12, 7), "LIBRARY")],
-              units={("K", "W", (10, 8)): 2}, gold=10)
-    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
-    assert spawns and all(a.at is None for a in spawns)
+              units={("K", "W", (10, 8)): 2}, gold=19)
+    spawns = {a.kind: a.at for a in strategy.decide(w) if isinstance(a, Spawn)}
+    assert spawns == {"F": None, "W": (10, 7)}
+
+
+def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
+    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (5, 5), owner="Y", score=1)],
+              units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
+    assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
 
 
 def test_distance_map_links_stations_with_cost_one():
@@ -233,10 +273,11 @@ def test_warriors_teleport_to_far_front_at_most_five():
     assert not [a for a in actions if isinstance(a, Move) and a.src == (1, 1)]
 
 
-def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce():
+def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce(monkeypatch):
     # 걸으면 8칸, 순간이동 경로는 5턴(역 → 역 1 + 걷기 4) → 3턴 이득. 턴당 5명이라 대기열이 15명을 넘으면
     # 기다리는 것보다 걷는 게 빠르다. 역 옆 칸의 인원은 역으로 들어오지 않는다(들어왔다 물러나기를 반복했다).
     from agent.world import Tele
+    monkeypatch.setattr(strategy, "FRONT_COUNT", 0)  # 역이 전선 건물이라 한 명이 남는다. 여기서는 이동만 본다
     w = world([building(0, (7, 1), "STATION", owner="Y", score=1),
                building(1, (7, 13), "STATION", owner="Y", score=1)],
               units={("Y", "W", (7, 1)): 30, ("Y", "W", (6, 1)): 10, ("K", "F", (7, 9)): 1}, gold=0)

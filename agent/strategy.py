@@ -106,6 +106,15 @@ ATTACK_MARGIN = 2  # 공격: 우리 전투병이 적보다 이만큼 많으면
 EVICT_KINDS = {"HALL", "ENG", "HOSPITAL"}
 EVICT_RADIUS = 2
 EVICT_WEIGHT = 1.0
+# 경제 건물 몰아내기: 공학관·학생회관은 반경·가중치를 따로 둔다. 흉내 봇 "공학관 러시"(opponents/eng_rush.py) 상대로
+# main이 공학관을 절반쯤 잃는다 (docs/benchmarks.md "상대 풀"). 기본값은 다른 핵심 건물과 같다(= 예전 동작)
+ECON_KINDS = {"HALL", "ENG"}
+ECON_EVICT_RADIUS = 2
+ECON_WEIGHT = 1.0
+# 이동 중 깃발병 호위: 우리 깃발병이 있는 칸마다 전투병 1명(가치 ESCORT_VALUE, 0 = 끔). 리더보드에서 우리 깃발병 옆에
+# 전투병이 붙는 비율이 상대보다 낮고 깃발병이 강팀보다 2배 넘게 죽었다(이슈 #50). 파라미터 탐색(scripts/tune.py)에서
+# 0 / 0.5 / 1 / 2 중 1.0: 새 시드 50개 상대 풀 48.0 → 57.2%, 서버 맵 49개 main 상대 55.1% (docs/benchmarks.md)
+ESCORT_VALUE = 1.0
 # 전선: 적이 오기 전에, 점령을 끝낸 우리 건물 중 가장 노출된 곳에 전투병을 미리 세운다.
 # 노출 순위 = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리). 작을수록 전선
 FRONT_COUNT = 3
@@ -460,12 +469,16 @@ def kill_tasks(t: Turn) -> list[Task]:
 
 
 def escort_tasks(t: Turn) -> list[Task]:
-    """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다."""
+    """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다.
+    ESCORT_VALUE > 0이면 나머지 우리 깃발병(이동 중·대기 중)에도 전투병 1명씩."""
     tasks = []
     for c in t.capturing_now:
         b = c.building
         if t.threat.get(b.pos, 0) and b.pos not in t.enemy_flags:
             tasks.append(Task("호위", "W", b.pos, t.threat[b.pos], t.values[b.id]))
+    if ESCORT_VALUE > 0:  # 이동 중 깃발병: 위 호위 과제가 없는 칸마다 전투병 1명
+        covered = {task.pos for task in tasks}
+        tasks += [Task("호위", "W", pos, 1, ESCORT_VALUE) for pos, _ in t.flags if pos not in covered]
     return tasks
 
 
@@ -483,9 +496,12 @@ def evict_tasks(t: Turn) -> list[Task]:
     for b in t.world.owned(t.world.me):
         if b.kind not in EVICT_KINDS or b.id in guarded:
             continue
+        econ = b.kind in ECON_KINDS
+        radius = ECON_EVICT_RADIUS if econ else EVICT_RADIUS
+        weight = EVICT_WEIGHT * (ECON_WEIGHT if econ else 1.0)
         dist = t.dist_to(b.pos)
-        if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
-            tasks.append(Task("몰아내기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * EVICT_WEIGHT))
+        if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
+            tasks.append(Task("몰아내기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight))
     return tasks
 
 

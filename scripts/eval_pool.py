@@ -29,7 +29,7 @@ from profile_opponents import economy, from_local, tactics
 from sim import mapgen, match
 from sim.bots import resolve
 
-POOL = ("opponents/eng_rush.py", "opponents/econ_raid.py", "opponents/wide.py")
+POOL = ("opponents/eng_rush.py", "opponents/econ_raid.py", "opponents/wide.py", "opponents/blob.py")
 TACTICS = ("escort", "garrison", "stacks", "won", "battle_away", "fdead")
 
 

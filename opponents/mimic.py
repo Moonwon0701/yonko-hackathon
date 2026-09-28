@@ -37,6 +37,17 @@ def add_tasks(unit: str, maker: Maker) -> None:
     Turn.tasks = tasks
 
 
+def each_turn(update: Callable[[Turn], None]) -> None:
+    """매 턴 처음(칠판을 만들 때) `update(t)`를 부른다. 턴에 따라 상수를 바꿀 때 쓴다."""
+    original = Turn.__init__
+
+    def init(self: Turn, world) -> None:
+        original(self, world)
+        update(self)
+
+    Turn.__init__ = init
+
+
 def scale_capture(scale: Scale) -> None:
     """점령 과제의 가치에 `scale(t, 건물)`을 곱한다 (깃발병이 어느 건물로 가는가)."""
     original = Turn.tasks

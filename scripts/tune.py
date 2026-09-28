@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import json
 import statistics as st
+import subprocess
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
@@ -33,10 +34,11 @@ sys.path.insert(0, str(ROOT))
 from sim import mapgen, match
 from sim.bots import BotSpec, resolve
 
-POOL = ("opponents/eng_rush.py", "opponents/econ_raid.py", "opponents/wide.py")
+POOL = ("opponents/eng_rush.py", "opponents/econ_raid.py", "opponents/wide.py", "opponents/blob.py")
 MARGIN = 0.02
 
-# 상수 → 둘러볼 값. 지금 값(main 8fd93ee)을 가운데에 두고 양쪽으로 한 칸씩. "A.B"는 dict 상수 A의 키 B
+# 상수 → 둘러볼 값. 지금 값(main 8fd93ee)을 가운데에 두고 양쪽으로 한 칸씩. "A.B"는 dict 상수 A의 키 B.
+# 탐색의 출발점(지금 값)은 격자가 아니라 기준 봇에서 읽는다(defaults)
 GRID: dict[str, list] = {
     "MIN_WARRIORS": [1, 3, 5],
     "SPARE_FLAGS": [0, 1, 2],
@@ -57,7 +59,21 @@ GRID: dict[str, list] = {
     "FRONT_SURPLUS": [5, 10, 20],
     "FRONT_COUNT": [2, 3, 5],
     "RAID_STEAL": [1.0, 2.0, 3.0],
+    # 구조 변경 스위치 (첫 값 = 끔 또는 예전 동작)
+    "ESCORT_VALUE": [0.0, 0.5, 1.0, 2.0],
+    "ECON_EVICT_RADIUS": [2, 3, 4],
+    "ECON_WEIGHT": [1.0, 2.0, 3.0],
 }
+
+
+def defaults(base: BotSpec) -> dict:
+    """기준 봇의 실제 상수값 (탐색의 출발점). 기준 봇 폴더에서 따로 불러야 작업 폴더의 agent와 섞이지 않는다."""
+    code = ("import json; from agent import strategy as s; names = json.loads(input()); "
+            "print(json.dumps({n: (getattr(s, n.split('.')[0])[n.split('.')[1]] if '.' in n else getattr(s, n)) "
+            "for n in names}))")
+    out = subprocess.run([sys.executable, "-c", code], cwd=base.cwd, input=json.dumps(list(GRID)),
+                         capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
 
 
 def launcher(base: BotSpec, params: dict, folder: Path) -> str:
@@ -98,6 +114,7 @@ class Tuner:
         (out / "bots").mkdir(parents=True, exist_ok=True)
         self.log = open(out / "log.jsonl", "a", encoding="utf-8")  # noqa: SIM115 — 탐색 내내 연다
         self.cache: dict[tuple, dict] = {}
+        self.defaults = defaults(self.base)
 
     def score(self, params: dict, seeds: range) -> dict:
         """`params`로 덮어쓴 봇의 풀 평균 승점과 상대별 승점."""
@@ -157,7 +174,7 @@ def main() -> None:
     for rnd in range(1, args.rounds + 1):
         changed = False
         for name in names:
-            now = current.get(name, GRID[name][1])
+            now = current.get(name, tuner.defaults[name])
             trials = [(value, tuner.score({**current, name: value}, train)) for value in GRID[name] if value != now]
             value, found = max(trials, key=lambda t: t[1]["mean"])
             line = "  ".join(f"{v}: {f['mean']:.1%}" for v, f in trials)

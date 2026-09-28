@@ -1,0 +1,6 @@
+file,round,opponent,our_side,result,reason,turns,our_submission_version,game_id,original_name
+vs_AIKU_패.json,09-28 22:00,AIKU,Y,패,instant,110,8,rolling-game-5f8852079aec601059cc4af7801cd5b78ba968aded31820fcf794fd8ed3581b5,(사이트 API로 받아 바로 이 이름으로 저장)
+vs_어잌후_패.json,09-28 22:00,어잌후,Y,패,score,161,8,rolling-game-633c4a3474fb6133919d3d84908de3c48a47027ae29fd18cb4e602069eac8887,(사이트 API로 받아 바로 이 이름으로 저장)
+vs_참새튀김기_패.json,09-28 22:00,참새튀김기,Y,패,instant,107,8,rolling-game-3331d839237aed5c9b23d77678dea85d003395c8565f681488d8f2ca4f74a407,(사이트 API로 받아 바로 이 이름으로 저장)
+vs_연세대학교인공지능학과_승.json,09-28 22:00,연세대학교인공지능학과,Y,승,instant,149,8,rolling-game-304ec8c59d435e9f020455321411d58e0abed9e5c455c9abe767e1e49dae158f,(사이트 API로 받아 바로 이 이름으로 저장)
+vs_하면해_승.json,09-28 22:00,하면해,Y,승,instant,95,8,rolling-game-1f4ec6070fb6f98dbd8a89d9e5f123403dd50dfd670e23828742c58395469ac4,(사이트 API로 받아 바로 이 이름으로 저장)

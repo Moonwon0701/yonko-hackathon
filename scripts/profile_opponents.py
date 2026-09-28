@@ -38,6 +38,36 @@ def load(path: Path) -> dict:
         return json.load(f)
 
 
+def from_local(replay: dict, side: str) -> dict:
+    """로컬 경기 기록(`sim.match.play`)을 서버 리플레이 형식으로 바꾼다. `side` = "우리"로 볼 팀.
+
+    서버 형식에서 쓰는 것만 채운다: 턴별 유닛·건물 소유·자원·사건(battle·capture·neutral), 우리 명령 줄.
+    서버의 battle 사건은 전투병 없이 깃발병끼리 만난 칸도 포함하므로 로컬 standoff도 battle로 옮긴다.
+    우리 명령 줄은 요청이 아니라 실제로 만든 수(spawn 사건)로 `SPAWN` 줄을 만든다.
+    """
+    rows = replay["map"]["rows"]
+    specs = replay["map"]["buildings"]
+    turns = []
+    for i, frame in enumerate(replay["frames"]):
+        entry = replay["turns"][i - 1] if i else {"events": []}
+        events, lines = [], []
+        for e in entry["events"]:
+            kind = e["type"]
+            if kind in ("combat", "standoff"):
+                events.append({"kind": "battle", "x": e["pos"][0], "y": e["pos"][1]})
+            elif kind in ("capture", "neutralize"):
+                events.append({"kind": "capture" if kind == "capture" else "neutral", "team": e["team"],
+                               "buildingId": e["id"], "x": e["pos"][0], "y": e["pos"][1]})
+            elif kind == "spawn" and e["team"] == side:
+                lines.append(f"SPAWN {e['kind']} {e['n']}")
+        buildings = [{"id": b["id"], "type": b["kind"], "x": b["x"], "y": b["y"], "owner": owner or "N"}
+                     for b, owner in zip(specs, frame["owner"], strict=True)]
+        turns.append({"observation": {"turn": frame["turn"], "map": rows, "units": frame["units"],
+                                      "buildings": buildings, "resources": frame["resource"], "events": events},
+                      "command": {"lines": lines}})
+    return {"side": side, "result": replay["result"], "turns": turns}
+
+
 def load_games() -> list[dict]:
     """리더보드 회차의 경기 목록. 상대 이름·결과는 matches.csv에서."""
     games = []
@@ -66,9 +96,9 @@ def bases(turns: list[dict]) -> dict[str, tuple[int, int]]:
     raise ValueError("본진을 찾지 못함")
 
 
-def profile(path: Path, side: str | None = None) -> dict:
+def profile(path: Path | dict, side: str | None = None) -> dict:
     """한 경기에서 `side`(기본: 상대) 팀의 수치."""
-    r = load(path)
+    r = load(path) if isinstance(path, Path) else path
     turns = [t for t in r["turns"] if t["observation"].get("units") is not None]
     me = side or ("K" if r["side"] == "Y" else "Y")
     other = "Y" if me == "K" else "K"
@@ -131,14 +161,14 @@ def profile(path: Path, side: str | None = None) -> dict:
     return out
 
 
-def economy(path: Path, start: int = 20, end: int = 80) -> dict:
+def economy(path: Path | dict, start: int = 20, end: int = 80) -> dict:
     """생산량과 공학관. 전투는 같은 칸에서 양쪽 전투병을 같은 수만큼 없애고, 우리 전투병은 상대와의 전투에서만
     죽는다. 그래서 우리 `SPAWN W` 명령 합 − 우리 전투병 증감 = 우리 사망 = 상대 사망이고,
     상대 생산 = 상대 증감 + 우리 사망이다. (자원이 모자라 요청보다 덜 만든 턴이 있으면 우리 생산을 조금 크게 센다)
 
     공학관: 우리 쪽 공학관 = 첫 턴 우리 유닛들에 더 가까운 것. 전투병 값 3 = 공학관이 하나도 없는 턴.
     """
-    r = load(path)
+    r = load(path) if isinstance(path, Path) else path
     me = r["side"]
     op = "K" if me == "Y" else "Y"
     turns = {t["observation"]["turn"]: t for t in r["turns"] if t["observation"].get("units") is not None}
@@ -190,7 +220,7 @@ def escorted(w: Counter):
     return lambda c: any(w[(c[0] + dx, c[1] + dy)] for dx, dy in steps)
 
 
-def tactics(path: Path, side: str, start: int = 10, end: int = 80) -> dict:
+def tactics(path: Path | dict, side: str, start: int = 10, end: int = 80) -> dict:
     """유닛 운용 (start~end턴, 턴마다 센 비율의 평균). `side` 팀 기준.
 
     - w_home: 전투병 중 자기 건물 위에 선 비율 / garrison: 자기 건물 중 전투병이 선 비율
@@ -201,7 +231,7 @@ def tactics(path: Path, side: str, start: int = 10, end: int = 80) -> dict:
     - won/lost/tie: 전투 사건 칸에 전투 뒤 전투병이 남은 쪽 (전투 수 대비), battle_away: 상대 본진 쪽에서 난 전투 비율
     - fdead: 구간 안에서 깃발병이 줄어든 수의 합(=죽은 깃발병, 같은 턴 생산분만큼 적게 셈)
     """
-    r = load(path)
+    r = load(path) if isinstance(path, Path) else path
     other = "Y" if side == "K" else "K"
     turns = [t["observation"] for t in r["turns"] if t["observation"].get("units") is not None]
     home = bases([{"observation": o} for o in turns])

@@ -30,5 +30,5 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# 스타터 킷과 운영진 개발도구는 원본 그대로 두므로 린트하지 않는다
-extend-exclude = ["starter", "devtool"]
+# 스타터 킷과 운영진 개발도구, 흉내 봇의 고정 기준 봇(opponents/base)은 원본 그대로 두므로 린트하지 않는다
+extend-exclude = ["starter", "devtool", "opponents/base"]

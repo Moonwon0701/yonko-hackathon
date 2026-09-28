@@ -55,6 +55,14 @@ def test_flags_come_before_warriors_when_below_minimum():
     assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
+def test_more_flags_first_when_enemy_owns_more_buildings():
+    # 상대가 건물을 더 가지면 깃발병 최소 인원이 하나 늘어난다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (3, 7), owner="K"), building(1, (5, 3), owner="K")],
+              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=17)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("F", 3)]
+
+
 def test_priority_orders_simultaneous_captures_by_value():
     w = world([building(0, (3, 3), "LIBRARY", score=1), building(1, (5, 5), "WATCH", score=4)],
               units={("Y", "F", (3, 3)): 1, ("Y", "F", (5, 5)): 1}, gold=0)
@@ -183,11 +191,19 @@ def test_spawns_at_hospital_closer_to_targets():
     assert spawns and all(a.at == (10, 7) for a in spawns)
 
 
-def test_skips_hospital_that_enemy_warriors_can_reach():
+def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not():
+    # 깃발병은 적 전투병이 닿는 병원을 피해 본진에서, 전투병은 그 병원에서 만든다(1:1 상쇄라 손해가 없고 병원을 지킨다)
     w = world([building(0, (10, 7), "HOSPITAL", owner="Y", score=1), building(1, (12, 7), "LIBRARY")],
-              units={("K", "W", (10, 8)): 2}, gold=10)
-    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
-    assert spawns and all(a.at is None for a in spawns)
+              units={("K", "W", (10, 8)): 2}, gold=19)
+    spawns = {a.kind: a.at for a in strategy.decide(w) if isinstance(a, Spawn)}
+    assert spawns == {"F": None, "W": (10, 7)}
+
+
+def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
+    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (5, 5), owner="Y", score=1)],
+              units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
+    assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
 
 
 def test_distance_map_links_stations_with_cost_one():

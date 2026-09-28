@@ -163,6 +163,21 @@ def test_warrior_guards_our_building_when_enemy_flag_approaches():
     assert not [a for a in actions if isinstance(a, Move) and a.kind == "W"]
 
 
+def test_frontline_warrior_waits_on_most_exposed_building(monkeypatch):
+    # 적이 아직 오지 않아도 앞쪽 건물(6,7)을 지킨다: 그 위의 전투병은 중립 건물(9,7) 쪽으로 가지 않고 남고,
+    # 뒤쪽 건물(1,7) 위의 전투병은 과제가 없어 앞으로 나간다. (전선 과제가 없으면 둘 다 (9,7) 쪽으로 간다)
+    w = world([building(0, (1, 7), owner="Y", score=1), building(1, (6, 7), owner="Y", score=1),
+               building(2, (9, 7))],
+              units={("Y", "W", (1, 7)): 1, ("Y", "W", (6, 7)): 1, ("K", "W", (14, 0)): 1}, gold=0)
+    monkeypatch.setattr(strategy, "FRONT_COUNT", 1)
+    t = strategy.Turn(w)
+    strategy.read_situation(t)
+    ranks = {b.pos: strategy.front_rank(w, b, t.dist_to(b.pos), t.others) for b in w.owned("Y")}
+    assert ranks[(6, 7)] < ranks[(1, 7)]
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((1, 7), "W", 1, (2, 7))]
+
+
 def test_decide_stays_fast_with_huge_army():
     """전투병이 수백 명이어도 계산이 유닛 수에 비례해 늘지 않아야 한다 (서버는 로컬보다 약 12배 느리다).
 
@@ -227,10 +242,11 @@ def test_warriors_teleport_to_far_front_at_most_five():
     assert not [a for a in actions if isinstance(a, Move) and a.src == (1, 1)]
 
 
-def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce():
+def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce(monkeypatch):
     # 걸으면 8칸, 순간이동 경로는 5턴(역 → 역 1 + 걷기 4) → 3턴 이득. 턴당 5명이라 대기열이 15명을 넘으면
     # 기다리는 것보다 걷는 게 빠르다. 역 옆 칸의 인원은 역으로 들어오지 않는다(들어왔다 물러나기를 반복했다).
     from agent.world import Tele
+    monkeypatch.setattr(strategy, "FRONT_COUNT", 0)  # 역이 전선 건물이라 한 명이 남는다. 여기서는 이동만 본다
     w = world([building(0, (7, 1), "STATION", owner="Y", score=1),
                building(1, (7, 13), "STATION", owner="Y", score=1)],
               units={("Y", "W", (7, 1)): 30, ("Y", "W", (6, 1)): 10, ("K", "F", (7, 9)): 1}, gold=0)

@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 from fake_input import random_game
+from lv2_port import decide
 
 from agent import adapter
-from lv2_port import decide
 
 STARTER = Path(__file__).resolve().parent.parent / "starter"
 sys.path.insert(0, str(STARTER))

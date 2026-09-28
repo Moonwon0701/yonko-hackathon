@@ -60,7 +60,7 @@ def main() -> None:
         adapter.write_turn(sys.stdout, lines)
         try:
             log_turn(turn, (time.perf_counter() - start) * 1000, lines)
-        except Exception:  # noqa: BLE001 — 로그 실패로 경기를 망치지 않는다
+        except Exception:  # noqa: BLE001, S110 — 로그 실패로 경기를 망치지 않는다
             pass
 
 

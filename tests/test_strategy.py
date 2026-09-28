@@ -55,6 +55,14 @@ def test_flags_come_before_warriors_when_below_minimum():
     assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
+def test_more_flags_first_when_enemy_owns_more_buildings():
+    # 상대가 건물을 더 가지면 깃발병 최소 인원이 하나 늘어난다 (9/28 리더보드 패배 경기)
+    w = world([building(0, (3, 7), owner="K"), building(1, (5, 3), owner="K")],
+              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=17)
+    spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
+    assert spawns == [Spawn("F", 3)]
+
+
 def test_priority_orders_simultaneous_captures_by_value():
     w = world([building(0, (3, 3), "LIBRARY", score=1), building(1, (5, 5), "WATCH", score=4)],
               units={("Y", "F", (3, 3)): 1, ("Y", "F", (5, 5)): 1}, gold=0)

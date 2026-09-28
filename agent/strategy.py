@@ -38,6 +38,8 @@ M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 �
 
 현진 테마 브랜치(hyunjin/defense-econ) — 별동대 과제: 위험한 목표(상대 소유이거나 적 전투병이 닿는 건물)로 가는 깃발병
 1명(SECOND_SQUAD_TURN부터 2명)의 다음 칸에 전투병 SQUAD_SIZE명을 먼저 보내, 가는 길에서도 깃발병과 함께 움직인다.
+공학관 러시: ENG_RUSH_UNTIL턴까지 상대 캠퍼스 공학관에 전투병을 보내고 깃발병이 공학관을 먼저 노린다(흉내 봇 eng_rush의
+러시 부분). 별동대가 그 공학관으로 가는 깃발병을 지킨다.
 """
 
 from __future__ import annotations
@@ -128,6 +130,14 @@ RAID_SURPLUS = -99  # 우리 전투병이 적 전투병 + 이 값 이상일 때�
 SQUAD_SIZE = 5
 SQUAD_WEIGHT = 1.0
 SECOND_SQUAD_TURN = 30  # 이 턴부터 별동대 2개 (목표 건물이 서로 다른 깃발병 2명)
+# 공학관 러시(흉내 봇 opponents/eng_rush.py의 러시 부분): ENG_RUSH_UNTIL턴까지 상대 캠퍼스 공학관에 전투병
+# "위협 + ENG_RUSH_EXTRA"명(가치 ENG_RUSH_VALUE), 깃발병은 공학관 점령 가치 × ENG_RUSH_CAPTURE. 0이면 끔.
+# 별동대 버전(26fae2a) 상대 시드 200~299: 20 / 40 / 60 / 80 / 100 / 160턴 → 53 / 55 / 63 / 65 / 65 / 60%, 80턴은 300~399 52%.
+# 흉내 봇 풀 평균 62 → 69%, 서버 맵 main 상대 67 → 71%, main 69%·문원 49%는 그대로 (docs/benchmarks.md)
+ENG_RUSH_UNTIL = 80
+ENG_RUSH_EXTRA = 2
+ENG_RUSH_VALUE = 6.0
+ENG_RUSH_CAPTURE = 3.0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -452,7 +462,8 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
         value = (t.values[b.id]
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
-                 * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0))
+                 * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
+                 * (ENG_RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= ENG_RUSH_UNTIL else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -562,6 +573,21 @@ def squad_tasks(t: Turn) -> list[Task]:
         taken.add(task.building.id)
         cell = step_along(pos, t.dist_to(task.pos), t.order) or pos
         tasks.append(Task("별동대", "W", cell, SQUAD_SIZE, task.value * SQUAD_WEIGHT))
+    return tasks
+
+
+def eng_rush_tasks(t: Turn) -> list[Task]:
+    """공학관 러시: ENG_RUSH_UNTIL턴까지 상대 캠퍼스 공학관(상대 본진이 더 가까운 공학관 중 우리 것이 아닌 것)에 전투병
+    "위협 + ENG_RUSH_EXTRA"명. 상대 공학관을 빼앗으면 우리 전투병 값 3 → 2, 상대는 2 → 3이 된다."""
+    world = t.world
+    if world.turn > ENG_RUSH_UNTIL:
+        return []
+    home, away = world.map.bases[world.me], world.map.bases[world.enemy]
+    tasks = []
+    for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)):
+        dist = t.dist_to(b.pos)
+        if b.kind == "ENG" and b.owner != world.me and dist.get(away, 99) < dist.get(home, 99):
+            tasks.append(Task("공학관 러시", "W", b.pos, t.threat.get(b.pos, 0) + ENG_RUSH_EXTRA, ENG_RUSH_VALUE))
     return tasks
 
 
@@ -857,6 +883,11 @@ def squad() -> Node:
                   "W", squad_tasks)
 
 
+def eng_rush() -> Node:
+    return enable(f"공학관 러시: {ENG_RUSH_UNTIL}턴까지 상대 캠퍼스 공학관에 전투병 위협 + {ENG_RUSH_EXTRA}명, "
+                  f"깃발병은 공학관 가치 ×{ENG_RUSH_CAPTURE:g}", "W", eng_rush_tasks)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -865,19 +896,19 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), warriors(2),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), eng_rush(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), eng_rush(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), warriors(1),
     ),
 )
 

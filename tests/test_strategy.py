@@ -217,6 +217,14 @@ def test_no_frontline_without_warrior_surplus():
     assert moves == [Move((6, 7), "W", 1, (7, 7))]
 
 
+def test_warrior_raids_enemy_engineering_hall_over_closer_neutral():
+    # 과제 없는 전투병은 가까운 중립 도서관(5,5)으로 가지만, 급습 과제가 있으면 상대 공학관(8,7)으로 간다
+    w = world([building(0, (5, 5), "LIBRARY"), building(1, (8, 7), "ENG", owner="K", score=1)],
+              units={("Y", "W", (5, 7)): 1}, gold=0)
+    moves = [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "W"]
+    assert moves == [Move((5, 7), "W", 1, (6, 7))]
+
+
 def test_decide_stays_fast_with_huge_army():
     """전투병이 수백 명이어도 계산이 유닛 수에 비례해 늘지 않아야 한다 (서버는 로컬보다 약 12배 느리다).
 

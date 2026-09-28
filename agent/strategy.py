@@ -107,6 +107,11 @@ FRONT_NEED = 1  # 호위 없는 적 깃발병은 전투병 한 명으로 막힌�
 # 우리 전투병이 적보다 이만큼 이상 많을 때만 세운다. 늘 세우면 적 깃발병을 쫓을 전투병이 모자라 예전 봇 상대로
 # 떨어졌다(M4 72 → 62%, M3 96 → 87% — docs/benchmarks.md)
 FRONT_SURPLUS = 10
+# 급습: 상대 경제 건물(공학관 = 전투병 값 −1, 학생회관 = 수입 +2)에 전투병을 보내고 깃발병이 뒤따라 빼앗는다.
+# 리더보드 상위 봇에게 진 경기는 모두 우리 공학관·학생회관을 잃고 생산력이 벌어지며 무너졌다 — 그 반대를 노린다
+RAID_KINDS = {"ENG", "HALL"}
+RAID_STEAL = 2.0  # 상대 경제 건물의 점령 가치에 더 곱하는 값
+RAID_SURPLUS = -99  # 우리 전투병이 적 전투병 + 이 값 이상일 때만 급습한다
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -424,11 +429,14 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     남은 점령 단계: 뽑아 줄 건물·중립은 1, 상대 건물은 중립화 → 점령 2 (목표에 우리 건물은 없다).
     """
     tasks = []
+    arrival = getattr(t, "arrival", {})  # 전투병이 가는 칸 (깃발병 2차에서만 있다)
     for b in t.targets:
         pulled = b.id in t.pulled
+        covered = pulled or b.pos in arrival
         value = (t.values[b.id]
-                 * (danger if t.threat.get(b.pos, 0) and not pulled else 1.0)
-                 * (steal if b.owner is not None else 1.0))
+                 * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
+                 * (steal if b.owner is not None else 1.0)
+                 * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -504,6 +512,16 @@ def front_rank(world: World, b: Building, dist: dict[Pos, int], others: list[Bui
     bases = world.map.bases
     margin = dist.get(bases[world.enemy], far) - dist.get(bases[world.me], far)
     return front + FRONT_MARGIN_WEIGHT * margin
+
+
+def raid_tasks(t: Turn, weight: float) -> list[Task]:
+    """급습: 상대 공학관·학생회관(RAID_KINDS) 위에 전투병을 "그 칸 위협 + 1"명 보낸다(가치 × weight). 전투병이 서면
+    깃발병이 위험 할인 없이 뒤따라 중립화 → 점령한다. 우리 전투병이 적 + RAID_SURPLUS보다 적으면 하지 않는다."""
+    world = t.world
+    if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
+        return []
+    return [Task("급습", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight)
+            for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]
 
 
 # ------------------------------------------------------------------ 깃발병
@@ -776,6 +794,11 @@ def frontline(weight: float) -> Node:
                   "W", lambda t: frontline_tasks(t, weight))
 
 
+def raid(weight: float) -> Node:
+    return enable(f"급습 과제: 상대 {'·'.join(sorted(RAID_KINDS))}에 전투병 (가치 ×{weight:g})",
+                  "W", lambda t: raid_tasks(t, weight))
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -784,19 +807,19 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), warriors(2),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), warriors(1),
     ),
 )
 

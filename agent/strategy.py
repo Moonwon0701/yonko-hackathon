@@ -115,6 +115,15 @@ ECON_WEIGHT = 1.0
 # 전투병이 붙는 비율이 상대보다 낮고 깃발병이 강팀보다 2배 넘게 죽었다(이슈 #50). 파라미터 탐색(scripts/tune.py)에서
 # 0 / 0.5 / 1 / 2 중 1.0: 새 시드 50개 상대 풀 48.0 → 57.2%, 서버 맵 49개 main 상대 55.1% (docs/benchmarks.md)
 ESCORT_VALUE = 1.0
+# 경제 건물(ECON_KINDS) 지키기·몰아내기의 필요 인원 = ECON_DEFEND_REACH걸음 안의 적 전투병 + 1 (다음 턴 위협이 더 크면
+# 그것 + 1). 1이면 예전과 같다(다음 턴 그 칸에 올 수 있는 적만 셈). 흉내 봇 "공학관 러시"는 2칸 밖에서 다가오는 전투병
+# 2명 + 깃발병 1명으로 우리 공학관을 빼앗았고, 그때 우리는 위협 0으로 보고 1명만 보냈다(seed 3009 31~34턴).
+# 모든 건물에 넓게 세면 크게 나빠졌다(2·3·4걸음: 상대 풀 56.5 → 46.5 / 30.0 / 17.5%). 경제 건물만 2걸음: 새 시드 50개 상대
+# 풀 56.4 → 62.6%, 서버 맵 49개 main 상대 59.2%. 호위만 켠 버전과 직접 대결은 새 시드 56.0%, 서버 맵 45.9%로 엇갈림
+ECON_DEFEND_REACH = 2
+# 급습 멈춤: 우리 경제 건물 RAID_HOME_SAFE걸음 안에 적 전투병이 있으면 급습 과제를 내지 않는다(0 = 늘 급습). 같은 경기에서
+# 우리 공학관 4칸 안 전투병 10~14명이 상대 건물 급습 길에 공학관을 지나쳤다
+RAID_HOME_SAFE = 0
 # 전선: 적이 오기 전에, 점령을 끝낸 우리 건물 중 가장 노출된 곳에 전투병을 미리 세운다.
 # 노출 순위 = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리). 작을수록 전선
 FRONT_COUNT = 3
@@ -485,7 +494,17 @@ def escort_tasks(t: Turn) -> list[Task]:
 def guard_tasks(t: Turn, weight: float) -> list[Task]:
     """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다(가치 × weight). 올라오는 적 깃발병을
     그 칸에서 잡는다."""
-    return [Task("지키기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight) for b, _ in t.pressured]
+    return [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
+
+
+def defend_need(t: Turn, b: Building) -> int:
+    """우리 건물 `b`를 지키는 데 필요한 전투병: 다음 턴 위협 + 1. 경제 건물은 ECON_DEFEND_REACH걸음 안의 적 전투병이
+    더 많으면 그것 + 1."""
+    near = 0
+    if b.kind in ECON_KINDS and ECON_DEFEND_REACH > 1:
+        dist = t.dist_to(b.pos)
+        near = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ECON_DEFEND_REACH)
+    return max(t.threat.get(b.pos, 0), near) + 1
 
 
 def evict_tasks(t: Turn) -> list[Task]:
@@ -501,7 +520,7 @@ def evict_tasks(t: Turn) -> list[Task]:
         weight = EVICT_WEIGHT * (ECON_WEIGHT if econ else 1.0)
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
-            tasks.append(Task("몰아내기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight))
+            tasks.append(Task("몰아내기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight))
     return tasks
 
 
@@ -542,6 +561,11 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     깃발병이 위험 할인 없이 뒤따라 중립화 → 점령한다. 우리 전투병이 적 + RAID_SURPLUS보다 적으면 하지 않는다."""
     world = t.world
     if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
+        return []
+    if RAID_HOME_SAFE and any(
+        t.dist_to(b.pos).get(p, 99) <= RAID_HOME_SAFE for b in world.owned(world.me) if b.kind in ECON_KINDS
+        for p, _ in t.enemy_warriors
+    ):
         return []
     return [Task("급습", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight)
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]

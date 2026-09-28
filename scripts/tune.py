@@ -63,6 +63,8 @@ GRID: dict[str, list] = {
     "ESCORT_VALUE": [0.0, 0.5, 1.0, 2.0],
     "ECON_EVICT_RADIUS": [2, 3, 4],
     "ECON_WEIGHT": [1.0, 2.0, 3.0],
+    "ECON_DEFEND_REACH": [1, 2, 3],
+    "RAID_HOME_SAFE": [0, 2, 3, 4],
 }
 
 

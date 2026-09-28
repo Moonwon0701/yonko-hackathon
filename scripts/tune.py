@@ -73,10 +73,11 @@ GRID: dict[str, list] = {
 
 
 def defaults(base: BotSpec) -> dict:
-    """기준 봇의 실제 상수값 (탐색의 출발점). 기준 봇 폴더에서 따로 불러야 작업 폴더의 agent와 섞이지 않는다."""
+    """기준 봇의 실제 상수값 (탐색의 출발점). 기준 봇 폴더에서 따로 불러야 작업 폴더의 agent와 섞이지 않는다.
+    기준 봇에 없는 상수(다른 브랜치에만 있는 스위치 등)는 빠진다."""
     code = ("import json; from agent import strategy as s; names = json.loads(input()); "
             "print(json.dumps({n: (getattr(s, n.split('.')[0])[n.split('.')[1]] if '.' in n else getattr(s, n)) "
-            "for n in names}))")
+            "for n in names if hasattr(s, n.split('.')[0])}))")
     out = subprocess.run([sys.executable, "-c", code], cwd=base.cwd, input=json.dumps(list(GRID)),
                          capture_output=True, text=True, check=True)
     return json.loads(out.stdout)
@@ -176,7 +177,10 @@ def main() -> None:
     current: dict = {}
     best = tuner.score(current, train)
     print(f"시작 {fmt(best)}", flush=True)
-    names = args.only or list(GRID)
+    names = [n for n in (args.only or list(GRID)) if n in tuner.defaults]
+    missing = [n for n in (args.only or list(GRID)) if n not in tuner.defaults]
+    if missing:
+        print("기준 봇에 없어 건너뜀:", " ".join(missing), flush=True)
     for rnd in range(1, args.rounds + 1):
         changed = False
         for name in names:

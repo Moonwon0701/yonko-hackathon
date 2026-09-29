@@ -262,8 +262,16 @@ def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not()
 
 
 def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
-    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기).
+    # 경제 건물은 ECON_DEFEND_REACH(2)걸음 안의 적 2명 + 1 = 3명을 보낸다 (다음 턴 위협만 세면 1명)
     w = world([building(0, (5, 5), owner="Y", score=1)],
+              units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
+    assert Move((5, 8), "W", 3, (5, 7)) in strategy.decide(w)
+
+
+def test_non_economic_key_building_counts_only_next_turn_threat():
+    # 병원은 몰아내기 대상이지만 경제 건물이 아니다: 다음 턴 위협(0) + 1 = 1명만 보낸다
+    w = world([building(0, (5, 5), kind="HOSPITAL", owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
     assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
 
@@ -303,3 +311,35 @@ def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce(monkeypatch):
     assert sum(m.count for m in moves if m.src == (7, 1)) == 15  # 10명은 역에서 기다리고 15명은 걷는다
     assert all(m.dst == (7, 2) for m in moves if m.src == (7, 1))
     assert not [m for m in moves if m.src == (6, 1) and m.dst == (7, 1)]
+
+
+def situation(w):
+    t = strategy.Turn(w)
+    strategy.read_situation(t)
+    return t
+
+
+def test_rush_targets_only_enemy_side_eng_until_rush_turn():
+    # 공학관 러시: 상대 본진(14,7)이 더 가까운 공학관에만 "위협 + RUSH_EXTRA"명, RUSH_UNTIL턴이 지나면 없다
+    buildings = [building(0, (11, 7), "ENG"), building(1, (3, 7), "ENG")]
+    tasks = strategy.rush_tasks(situation(world(buildings, turn=5)))
+    assert [(task.pos, task.need) for task in tasks] == [((11, 7), strategy.RUSH_EXTRA)]
+    assert strategy.rush_tasks(situation(world(buildings, turn=strategy.RUSH_UNTIL + 1))) == []
+
+
+def test_pickets_go_to_enemy_buildings_without_enemy_flags():
+    # 초소: 상대 건물마다 1명. 중립 건물과 적 깃발병이 선 상대 건물(처치 과제가 맡음)은 뺀다
+    buildings = [building(0, (10, 3), owner="K"), building(1, (10, 11), owner="K"), building(2, (7, 7), "PLAZA")]
+    t = situation(world(buildings, units={("K", "F", (10, 11)): 1}))
+    assert [(task.pos, task.need) for task in strategy.picket_tasks(t)] == [((10, 3), 1)]
+
+
+def test_squad_walks_ahead_of_flags_heading_to_risky_targets():
+    # 별동대: 상대 건물(5,3)로 가는 깃발병 (1,3)의 다음 칸 (2,3)에 전투병 SQUAD_SIZE명. 적 전투병이 닿지 않는 중립 건물
+    # (5,11)로 가는 깃발병은 위험하지 않아 뺀다. SECOND_SQUAD_TURN 전이므로 1명만
+    enemy, safe = building(0, (5, 3), owner="K"), building(1, (5, 11))
+    t = situation(world([enemy, safe], units={("Y", "F", (1, 3)): 1, ("Y", "F", (1, 11)): 1}, turn=5))
+    t.flags = sorted(t.world.units_of("Y", "F"))
+    t.f_tasks = [strategy.Task("점령", "F", b.pos, 1, 5.0, b, 1) for b in (enemy, safe)]
+    tasks = strategy.squad_tasks(t)
+    assert [(task.pos, task.need) for task in tasks] == [((2, 3), strategy.SQUAD_SIZE)]

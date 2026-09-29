@@ -219,8 +219,10 @@ ENDGAME_TURNS = 0
 FINAL_GUARD_WEIGHT = 0.0
 # 역전: COMEBACK_TURN턴 뒤 추정 점수가 뒤지면 위협 대응보다 먼저 — 상대 건물 가치 × 2, 위험 건물 × 0.8, 급습 × 2 (0 = 끔)
 COMEBACK_TURN = 0
-# 초반: OPENING_TURNS턴까지 중립 건물 점령 가치 × OPENING_NEUTRAL (0 = 끔). 30턴 건물 수가 앞선 경기 승 67%, 뒤진 경기 42%
-OPENING_TURNS = 0
+# 초반: OPENING_TURNS턴까지 중립 건물 점령 가치 × OPENING_NEUTRAL (0 = 끔). 30턴 건물 수가 앞선 경기 승 67%, 뒤진 경기 42%.
+# 무작위 맵 1000개 두 묶음에서 현진 봇 상대 54.8 → 58.7%, 53.8 → 58.5%, 탈환·조기 경보 봇(2a844fe)과 직접 55.9%.
+# ×2는 57.3%, 위험 감수 0.8을 더해도 58.6%로 같음
+OPENING_TURNS = 30
 OPENING_NEUTRAL = 1.5
 # 위협 대응 가지의 가중치 (31턴 뒤 턴의 97~100%가 이 가지라 사실상 봇 전체의 가중치)
 THREAT_GUARD = 2.0

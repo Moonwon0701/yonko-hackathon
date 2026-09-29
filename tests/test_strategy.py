@@ -343,3 +343,33 @@ def test_squad_walks_ahead_of_flags_heading_to_risky_targets():
     t.f_tasks = [strategy.Task("점령", "F", b.pos, 1, 5.0, b, 1) for b in (enemy, safe)]
     tasks = strategy.squad_tasks(t)
     assert [(task.pos, task.need) for task in tasks] == [((2, 3), strategy.SQUAD_SIZE)]
+
+
+def test_retake_targets_eng_we_lost_recently(monkeypatch):
+    # 탈환: 10턴에 우리 것이던 공학관이 12턴에 중립(적 깃발병이 점령 중) → 그 칸에 "위협 + RETAKE_EXTRA"명.
+    # RETAKE_MEMORY턴이 지나면, 또는 스위치가 꺼져 있으면 과제가 없다
+    monkeypatch.setattr(strategy, "_last_owned", {})
+    monkeypatch.setattr(strategy, "RETAKE_VALUE", 4.0)
+    situation(world([building(0, (3, 7), "ENG", owner="Y")], turn=10))
+    lost = [building(0, (3, 7), "ENG")]
+    t = situation(world(lost, units={("K", "F", (3, 7)): 1}, turn=12))
+    assert [(task.pos, task.need) for task in strategy.retake_tasks(t)] == [((3, 7), strategy.RETAKE_EXTRA)]
+    later = situation(world(lost, turn=10 + strategy.RETAKE_MEMORY + 1))
+    assert strategy.retake_tasks(later) == []
+    monkeypatch.setattr(strategy, "RETAKE_VALUE", 0.0)
+    assert strategy.retake_tasks(t) == []
+
+
+def test_eng_deficit_phase_focuses_warriors_on_eng(monkeypatch):
+    # 공학관 열세: 상대만 공학관을 가지면(전투병 값 3 : 2) DEFICIT 국면, 우리 것이 아닌 공학관 전부에 전투병 과제
+    monkeypatch.setattr(strategy, "ENG_DEFICIT", 1)
+    buildings = [building(0, (11, 7), "ENG", owner="K"), building(1, (3, 3), "ENG"), building(2, (5, 11))]
+    w = world(buildings, units={("Y", "W", (1, 7)): 5}, gold=0)
+    strategy.decide(w)
+    assert strategy.note() == "DEFICIT"
+    t = situation(w)
+    assert sorted(task.pos for task in strategy.eng_focus_tasks(t)) == [(3, 3), (11, 7)]
+    monkeypatch.setattr(strategy, "ENG_DEFICIT", 0)  # 꺼도 국면 유지(Latch)로 HOLD_TURNS - 1턴은 남는다
+    for _ in range(strategy.HOLD_TURNS):
+        strategy.decide(w)
+    assert strategy.note() != "DEFICIT"

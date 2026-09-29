@@ -47,6 +47,13 @@ POOLS = {
         "blob": ("opponents/blob.py", 1),
         "econ_raid": ("opponents/econ_raid.py", 1),
     },
+    "unitops2": {  # unitops에서 주 상대 비중을 올린 것 (목표 = daa1888을 이기기)
+        "daa1888": ("git:daa1888", 6),
+        "7941b88": ("git:7941b88", 2),
+        "hyunjin": ("git:7b8b67e", 2),
+        "sunghyuk": ("git:73e2691", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
         "daa1888": ("git:daa1888", 4),
         "7941b88": ("git:7941b88", 2),
@@ -137,11 +144,13 @@ def write_w(path: Path, theta: list[float]) -> Path:
     return path
 
 
-def validate(ex, out: Path, theta: list[float], maps: list, tag: str) -> dict:
-    """θ를 풀 상대 모두와(가중치 없이) 맵 × 진영 교대로 둔다. 상대별 승점률."""
+def validate(ex, out: Path, theta: list[float], maps: list, tag: str, weighted: bool = False) -> dict:
+    """θ를 풀 상대 모두와 둔다(맵마다 진영 하나). 상대별 승점률. `weighted`면 상대마다 맵 수를 풀 비중에 맞춘다
+    (비중이 가장 큰 상대 = 맵 전부) — 주 상대와의 차이를 가릴 판 수를 확보한다."""
     wpath = write_w(out / f"val_{tag}.json", theta)
+    top = max(w for _, w in POOL.values())
     tasks = [((name, m_i), maps[m_i], "YK"[m_i % 2], str(wpath), spec)
-             for name, (spec, _) in POOL.items() for m_i in range(len(maps))]
+             for name, (spec, w) in POOL.items() for m_i in range(len(maps) * w // top if weighted else len(maps))]
     per: dict[str, list[float]] = {}
     for (name, *_), _, info in ex.map(play_one, tasks, chunksize=2):
         if info and not isinstance(info, str):
@@ -162,6 +171,7 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=22)
     ap.add_argument("--val-every", type=int, default=10)
     ap.add_argument("--val-seeds", type=int, default=20)
+    ap.add_argument("--val-weighted", action="store_true", help="검증 판 수를 상대마다 풀 비중에 맞춤")
     ap.add_argument("--resume", help="θ 파일(learned.W 형식 JSON)")
     ap.add_argument("--validate", help="학습 없이 이 θ만 검증")
     ap.add_argument("--maps", help="검증에 쓸 서버 리플레이 폴더 (없으면 생성 시드 900000~)")
@@ -194,8 +204,8 @@ def main() -> None:
     theta = from_w(json.loads(Path(args.resume or args.validate).read_text())) if (args.resume or args.validate) else [0.0] * DIM
     with ProcessPoolExecutor(args.jobs) as ex:
         if args.validate:
-            base = validate(ex, out, [0.0] * DIM, val_maps, "base")
-            rates = validate(ex, out, theta, val_maps, "theta")
+            base = validate(ex, out, [0.0] * DIM, val_maps, "base", args.val_weighted)
+            rates = validate(ex, out, theta, val_maps, "theta", args.val_weighted)
             print("기준  ", json.dumps({k: round(v, 3) for k, v in base.items()}, ensure_ascii=False))
             print("학습  ", json.dumps({k: round(v, 3) for k, v in rates.items()}, ensure_ascii=False))
             return
@@ -204,7 +214,7 @@ def main() -> None:
         adam = Adam(DIM, args.lr)
         opp_cycle = [spec for spec, weight in POOL.values() for _ in range(weight)]
         print(f"차원 {DIM}, 후보 {2 * args.pop}, 후보당 {args.maps_per_gen}경기, 기록 {out}", flush=True)
-        base = validate(ex, out, theta, val_maps, "base")  # 출발점(이어서 할 때는 불러온 θ)의 검증값
+        base = validate(ex, out, theta, val_maps, "base", args.val_weighted)  # 출발점(이어서 할 때는 불러온 θ)의 검증값
         print("출발점 검증", json.dumps({k: round(v, 3) for k, v in base.items()}), flush=True)
         log.write(json.dumps({"gen": 0, "val": base}) + "\n")
         for gen in range(1, args.gens + 1):
@@ -245,7 +255,7 @@ def main() -> None:
             row = {"gen": gen, "fit_mean": sum(fit) / len(fit), "fit_max": max(fit), "win": win,
                    "norm": norm, "errors": errors, "sec": round(time.perf_counter() - started, 1)}
             if gen % args.val_every == 0:
-                row["val"] = validate(ex, out, theta, val_maps, f"g{gen}")
+                row["val"] = validate(ex, out, theta, val_maps, f"g{gen}", args.val_weighted)
                 write_w(out / f"theta_g{gen}.json", theta)
             log.write(json.dumps(row) + "\n")
             log.flush()

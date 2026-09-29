@@ -164,6 +164,12 @@ ENG_RUSH_UNTIL = 80
 ENG_RUSH_EXTRA = 2
 ENG_RUSH_VALUE = 6.0
 ENG_RUSH_CAPTURE = 3.0
+# 러시 접기: ENG_RUSH_GIVEUP턴이 지나도 상대 캠퍼스 공학관을 한 번도 가진 적이 없으면 그 경기는 러시(전투병·깃발병 가치 둘 다)를
+# 그만둔다. 공학관 러시 흉내 봇에게 진 맵은 30턴에 상대 공학관을 가진 비율이 27%(이긴 맵 71%)였고, 80턴까지 러시에 묶인
+# 전투병 때문에 중앙 건물(보급소·광장·역)을 내줬다. 0이면 끔.
+# 끔: 30 / 40 / 50턴 → 2cdf9f1 상대 46 / 53.5 / 52%, 흉내 봇 풀 평균 79 / 81 / 80% (지금 79%, 공학관 러시 상대 56 → 64 / 68 / 64%).
+# 40턴: moonwon/merge-squad 상대 48 → 57%, moonwon/unit-ops 상대 44 → 41% — 엇갈리고 모두 오차 안 (docs/benchmarks.md)
+ENG_RUSH_GIVEUP = 0
 # 수비대: GARRISON_UNTIL턴까지 우리 공학관·학생회관(GARRISON_KINDS) 위에 전투병 GARRISON_NEED명을 적이 오기 전에 세운다
 # (가치 × GARRISON_WEIGHT). 몰아내기는 적 전투병이 온 뒤에 움직인다. 흉내 봇 풀에서 공학관을 잃는 경기가 절반쯤이었다. 0이면 끔.
 # 끔: 40 / 80 / 160턴 × 1명 → 7001772 상대 55.5 / 53 / 46%, 3명 → 43.5 / 43 / 39%. 흉내 봇 풀 공학관 잃음 51%가 그대로
@@ -175,6 +181,7 @@ GARRISON_WEIGHT = 1.0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
+_eng_rush = {"held": False}  # 이번 경기에서 상대 캠퍼스 공학관을 한 번이라도 가졌는가 (러시 접기)
 _depots_taken: set[int] = set()  # 우리가 소유했던 보급소 id (보너스는 1회뿐). 한 프로세스 = 한 경기
 _dist_cache: dict[Pos, dict[Pos, int]] = {}  # 칸 → 그 칸까지의 거리표. 맵은 경기 내내 같으므로 턴을 넘어 재사용
 _tele_cache: dict[tuple[Pos, tuple[Pos, ...]], dict[Pos, int]] = {}  # (칸, 우리 역들) → 역 포함 거리표
@@ -257,6 +264,7 @@ def read_situation(t: Turn) -> None:
     t.enemy_warriors = world.units_of(enemy, "W")
     t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
     t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
+    t.eng_rush_on = eng_rush_active(t)
     t.others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
     # 상대 깃발병이 있는 건물은 경합이라, 전투병이 뽑아 주기 전에는 깃발병 목표가 아니다
     t.free_targets = [b for b in t.others if b.pos not in t.enemy_flags]
@@ -466,6 +474,7 @@ def remember(world: World) -> None:
     if world.turn <= 1:
         _depots_taken.clear()
         _phase.update(name="EXPAND", calm=0)
+        _eng_rush["held"] = False
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
     if _dist_cache_rows != [world.map.rows]:
         _dist_cache.clear()
@@ -538,7 +547,7 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
-                 * (ENG_RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= ENG_RUSH_UNTIL else 1.0))
+                 * (ENG_RUSH_CAPTURE if b.kind == "ENG" and t.eng_rush_on else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -688,16 +697,33 @@ def squad_tasks(t: Turn) -> list[Task]:
 def eng_rush_tasks(t: Turn) -> list[Task]:
     """공학관 러시: ENG_RUSH_UNTIL턴까지 상대 캠퍼스 공학관(상대 본진이 더 가까운 공학관 중 우리 것이 아닌 것)에 전투병
     "위협 + ENG_RUSH_EXTRA"명. 상대 공학관을 빼앗으면 우리 전투병 값 3 → 2, 상대는 2 → 3이 된다."""
-    world = t.world
-    if world.turn > ENG_RUSH_UNTIL:
+    if not t.eng_rush_on:
         return []
+    return [Task("공학관 러시", "W", b.pos, t.threat.get(b.pos, 0) + ENG_RUSH_EXTRA, ENG_RUSH_VALUE)
+            for b in enemy_campus_eng(t) if b.owner != t.world.me]
+
+
+def enemy_campus_eng(t: Turn) -> list[Building]:
+    """상대 캠퍼스 공학관: 우리 본진보다 상대 본진까지 걸음이 짧은 공학관 (정규화 좌표 순)."""
+    world = t.world
     home, away = world.map.bases[world.me], world.map.bases[world.enemy]
-    tasks = []
+    found = []
     for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)):
         dist = t.dist_to(b.pos)
-        if b.kind == "ENG" and b.owner != world.me and dist.get(away, 99) < dist.get(home, 99):
-            tasks.append(Task("공학관 러시", "W", b.pos, t.threat.get(b.pos, 0) + ENG_RUSH_EXTRA, ENG_RUSH_VALUE))
-    return tasks
+        if b.kind == "ENG" and dist.get(away, 99) < dist.get(home, 99):
+            found.append(b)
+    return found
+
+
+def eng_rush_active(t: Turn) -> bool:
+    """이번 턴 공학관 러시를 하는가: ENG_RUSH_UNTIL턴까지. 단 ENG_RUSH_GIVEUP턴이 지나도 상대 캠퍼스 공학관을 한 번도 가진
+    적이 없으면 그만둔다(_eng_rush["held"]에 경기 중 한 번이라도 가졌는지 기억)."""
+    world = t.world
+    if any(b.owner == world.me for b in enemy_campus_eng(t)):
+        _eng_rush["held"] = True
+    if world.turn > ENG_RUSH_UNTIL:
+        return False
+    return not (ENG_RUSH_GIVEUP and world.turn > ENG_RUSH_GIVEUP and not _eng_rush["held"])
 
 
 def garrison_tasks(t: Turn) -> list[Task]:

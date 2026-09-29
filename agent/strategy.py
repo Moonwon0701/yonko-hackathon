@@ -289,6 +289,11 @@ HOSPITAL_THREAT = 0
 # 제출본(7941b88)과 직접: 1 = 새 맵 58.8 · 66.0%(시드 8000·9000번대 각 400경기), 서버 맵 61.5%. 2 = 72.8 · 65.0%, 서버 맵
 # 64.8%, 흉내 봇 풀 76.6 → 80.6%. 2는 현진(7b8b67e) 74.0 / 73.8%, 0f689cd 73.5 / 72.1%(제출본은 69.0 / 68.5, 69.5 / 71.2)
 ENG_BANK = 2
+# 같은 계열(건물을 얻는 순간을 기다려 생산). 병원 타이밍: 이번 턴 끝에 병원을 얻고 그 병원이 전투병 목표까지 지금 생산 칸보다
+# HOSP_BANK걸음 이상 가까우면 한 턴 미뤄 병원에서 만든다(0 = 끔). 위협 시 적립 안 함: 우리 경제 건물 BANK_SAFE걸음 안 적
+# 전투병이 우리보다 많으면 적립하지 않는다(0 = 끔)
+HOSP_BANK = 0
+BANK_SAFE = 0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -444,15 +449,17 @@ def produce(t: Turn) -> None:
     budget -= more_f * fc
     if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
         make_w += budget // wc
-    if ENG_BANK and wc > ENG_COST_FLOOR and eng_coming(t):
-        # 곧 공학관을 얻으면 전투병은 값이 내려간 뒤에 산다. 다음 턴 자원이 상한을 넘길 만큼은 이번에 쓴다
+    # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
+    passable = world.map.passable
+    sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
+    bank = ((ENG_BANK and wc > ENG_COST_FLOOR and eng_coming(t)) or (HOSP_BANK and hospital_coming(t, sites)))
+    if bank and not bank_unsafe(t):
+        # 곧 공학관(값 인하)이나 목표에 가까운 병원(생산 위치)을 얻으면 전투병은 그 뒤에 산다. 다음 턴 자원이 상한을 넘길
+        # 만큼은 이번에 쓴다
         income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
         must = max(0, world.gold[me] + income - RESOURCE_CAP - make_f * fc)
         make_w = min(make_w, -(-must // wc))
     t.make_w, t.make_f = make_w, make_f
-    # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
-    passable = world.map.passable
-    sites = [world.map.bases[me]] + sorted((b.pos for b in world.owned(me, "HOSPITAL")), key=key)
     # 전투병은 위협받는 병원에서도 만든다: 전투병끼리는 1:1로 상쇄되어 손해가 없고, 그 자리에서 병원을 지킨다.
     # (위협받는 병원을 빼던 때는 적이 다가오는 턴마다 먼 본진에서 생산했다 — 9/28 리더보드 패배 3경기에서 22~27턴)
     t.w_site = spawn_site(sites, distance_map(t.goals | {task.pos for task in t.w_tasks}, passable), {})
@@ -473,6 +480,38 @@ def eng_coming(t: Turn) -> bool:
         if d <= 1 and task.stages == 1:
             return True
         if ENG_BANK >= 2 and ((d <= 2 and task.stages == 1) or (d <= 1 and task.stages == 2)):
+            return True
+        if ENG_BANK >= 3 and ((d <= 3 and task.stages == 1) or (d <= 2 and task.stages == 2)):
+            return True
+    return False
+
+
+def bank_unsafe(t: Turn) -> bool:
+    """BANK_SAFE: 우리 경제 건물마다 BANK_SAFE걸음 안 적 전투병이 우리 전투병보다 많으면 적립하지 않는다."""
+    if not BANK_SAFE:
+        return False
+    world = t.world
+    ours = world.units_of(world.me, "W")
+    for b in world.owned(world.me):
+        if b.kind not in ECON_KINDS:
+            continue
+        dist = t.dist_to(b.pos)
+        if (sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= BANK_SAFE)
+                > sum(n for p, n in ours if dist.get(p, 99) <= BANK_SAFE)):
+            return True
+    return False
+
+
+def hospital_coming(t: Turn, sites: list[Pos]) -> bool:
+    """HOSP_BANK: 이번 턴 끝에 병원을 얻고(깃발병 1걸음 안, 1단계 남음), 그 병원이 전투병 목표까지 지금 생산 칸보다 HOSP_BANK걸음
+    이상 가까운가."""
+    goal_dist = distance_map(t.goals | {task.pos for task in t.w_tasks}, t.world.map.passable)
+    now = min(goal_dist.get(s, 10**6) for s in sites)
+    for pos, task in t.flag_plan1:
+        b = task.building
+        if b is None or b.kind != "HOSPITAL" or task.stages != 1 or t.dist_to(task.pos).get(pos, 99) > 1:
+            continue
+        if goal_dist.get(b.pos, 10**6) <= now - HOSP_BANK:
             return True
     return False
 

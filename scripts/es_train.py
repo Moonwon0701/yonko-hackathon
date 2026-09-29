@@ -8,10 +8,11 @@
 방법 (OpenAI-ES, Salimans et al. 2017):
 - 매개변수 θ = 상수 16개 × 특징 8개. θ = 0이면 기준 봇(현진 7b8b67e)과 똑같다.
 - 한 세대: 잡음 ε를 POP쌍 뽑아 θ ± σε 후보 2·POP개를 만든다(대칭 표본). 모든 후보가 **같은 경기 묶음**(이번 세대 새
-  생성 맵 × 진영 교대 × 풀 상대)을 둔다 → 후보끼리 차이가 맵 운이 아니라 가중치 차이에서 나온다.
+  생성 맵 × 풀 상대, 맵마다 진영 하나)을 둔다 → 후보끼리 차이가 맵 운이 아니라 가중치 차이에서 나온다.
 - 보상 = 승점(승 1, 무 0.5, 패 0) + MARGIN_W × 점수 차 / 총점. 후보 점수를 순위로 바꿔(가운데 0) 기울기를 어림하고
   Adam으로 θ를 옮긴다. 가중치 감쇠로 θ를 0(= 기준 봇) 쪽으로 당긴다 — 이득이 없는 변화는 남지 않는다.
 - 학습 맵은 매 세대 새 시드(10만 이상), 검증은 고정 시드(90만~) 또는 서버 맵. 모든 기록은 runs/es/<시각>/.
+- 진영 교대는 하지 않는다: 맵이 점대칭이고 봇이 자기 본진 기준으로 움직여, 진영만 바꾼 경기는 결과가 똑같았다(12판 확인).
 """
 
 from __future__ import annotations
@@ -115,8 +116,8 @@ def write_w(path: Path, theta: list[float]) -> Path:
 def validate(ex, out: Path, theta: list[float], maps: list, tag: str) -> dict:
     """θ를 풀 상대 모두와(가중치 없이) 맵 × 진영 교대로 둔다. 상대별 승점률."""
     wpath = write_w(out / f"val_{tag}.json", theta)
-    tasks = [((name, m_i, side), maps[m_i], side, str(wpath), spec)
-             for name, (spec, _) in POOL.items() for m_i in range(len(maps)) for side in ("Y", "K")]
+    tasks = [((name, m_i), maps[m_i], "YK"[m_i % 2], str(wpath), spec)
+             for name, (spec, _) in POOL.items() for m_i in range(len(maps))]
     per: dict[str, list[float]] = {}
     for (name, *_), _, info in ex.map(play_one, tasks, chunksize=2):
         if info and not isinstance(info, str):
@@ -130,7 +131,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gens", type=int, default=100)
     ap.add_argument("--pop", type=int, default=12, help="잡음 쌍 수 (후보 = 2배)")
-    ap.add_argument("--maps-per-gen", type=int, default=8, help="세대마다 새 맵 수 (× 진영 2 = 후보당 경기)")
+    ap.add_argument("--maps-per-gen", type=int, default=8, help="세대마다 새 맵 수 (= 후보당 경기)")
     ap.add_argument("--sigma", type=float, default=0.25)
     ap.add_argument("--lr", type=float, default=0.03)
     ap.add_argument("--decay", type=float, default=0.002, help="θ를 0 쪽으로 당기는 비율(세대당)")
@@ -141,7 +142,15 @@ def main() -> None:
     ap.add_argument("--validate", help="학습 없이 이 θ만 검증")
     ap.add_argument("--maps", help="검증에 쓸 서버 리플레이 폴더 (없으면 생성 시드 900000~)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--normal-priority", action="store_true", help="우선순위를 낮추지 않는다")
     args = ap.parse_args()
+    if sys.platform == "win32" and not args.normal_priority:
+        # 우선순위 "낮음"(BELOW_NORMAL). 자식 프로세스(작업자·봇)도 물려받아, 같은 컴퓨터의 다른 작업이 먼저 CPU를 쓴다
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        k32.GetCurrentProcess.restype = ctypes.c_void_p  # 핸들은 64비트. 기본(int)으로 넘기면 설정이 조용히 실패한다
+        k32.SetPriorityClass.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+        k32.SetPriorityClass(k32.GetCurrentProcess(), 0x4000)
 
     for spec, _ in POOL.values():  # git 봇은 한 번만 풀어 둔다(병렬 작업끼리 경합하지 않게)
         resolve(spec)
@@ -163,11 +172,10 @@ def main() -> None:
         rng = random.Random(args.seed)
         adam = Adam(DIM, args.lr)
         opp_cycle = [spec for spec, weight in POOL.values() for _ in range(weight)]
-        print(f"차원 {DIM}, 후보 {2 * args.pop}, 후보당 {2 * args.maps_per_gen}경기, 기록 {out}", flush=True)
-        if not args.resume:
-            base = validate(ex, out, theta, val_maps, "base")
-            print("기준 검증", json.dumps({k: round(v, 3) for k, v in base.items()}), flush=True)
-            log.write(json.dumps({"gen": 0, "val": base}) + "\n")
+        print(f"차원 {DIM}, 후보 {2 * args.pop}, 후보당 {args.maps_per_gen}경기, 기록 {out}", flush=True)
+        base = validate(ex, out, theta, val_maps, "base")  # 출발점(이어서 할 때는 불러온 θ)의 검증값
+        print("출발점 검증", json.dumps({k: round(v, 3) for k, v in base.items()}), flush=True)
+        log.write(json.dumps({"gen": 0, "val": base}) + "\n")
         for gen in range(1, args.gens + 1):
             started = time.perf_counter()
             eps = [[rng.gauss(0, 1) for _ in range(DIM)] for _ in range(args.pop)]
@@ -178,8 +186,9 @@ def main() -> None:
                     cands.append(write_w(out / "cand" / f"{2 * j + (sign < 0)}.json", c))
             seeds = [rng.randrange(100000, 10**9) for _ in range(args.maps_per_gen)]
             opps = [opp_cycle[rng.randrange(len(opp_cycle))] for _ in seeds]
-            tasks = [((ci, si, side), s, side, str(cands[ci]), opps[si])
-                     for ci in range(len(cands)) for si, s in enumerate(seeds) for side in ("Y", "K")]
+            sides = [rng.choice("YK") for _ in seeds]
+            tasks = [((ci, si), s, sides[si], str(cands[ci]), opps[si])
+                     for ci in range(len(cands)) for si, s in enumerate(seeds)]
             rewards: list[list[float]] = [[] for _ in cands]
             outcomes: list[list[float]] = [[] for _ in cands]
             errors = 0

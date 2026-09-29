@@ -262,10 +262,30 @@ def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not()
 
 
 def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
-    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기).
+    # 경제 건물은 ECON_DEFEND_REACH(2)걸음 안의 적 2명 + 1 = 3명을 보낸다 (다음 턴 위협만 세면 1명)
+    # (이 테스트와 아래 병원 테스트는 moonwon/eval-tuning adffd5b에서 가져옴)
     w = world([building(0, (5, 5), owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
+    assert Move((5, 8), "W", 3, (5, 7)) in strategy.decide(w)
+
+
+def test_non_economic_key_building_counts_only_next_turn_threat():
+    # 병원은 몰아내기 대상이지만 경제 건물이 아니다: 다음 턴 위협(0) + 1 = 1명만 보낸다
+    w = world([building(0, (5, 5), kind="HOSPITAL", owner="Y", score=1)],
+              units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
     assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
+
+
+def test_eng_rush_targets_only_enemy_side_eng_until_rush_turn():
+    # 공학관 러시: 상대 본진(14,7)이 더 가까운 공학관에만 "위협 + ENG_RUSH_EXTRA"명, ENG_RUSH_UNTIL턴이 지나면 없다
+    buildings = [building(0, (11, 7), "ENG"), building(1, (3, 7), "ENG")]
+    t = strategy.Turn(world(buildings, turn=5))
+    strategy.read_situation(t)
+    assert [(task.pos, task.need) for task in strategy.eng_rush_tasks(t)] == [((11, 7), strategy.ENG_RUSH_EXTRA)]
+    t = strategy.Turn(world(buildings, turn=strategy.ENG_RUSH_UNTIL + 1))
+    strategy.read_situation(t)
+    assert strategy.eng_rush_tasks(t) == []
 
 
 def test_distance_map_links_stations_with_cost_one():

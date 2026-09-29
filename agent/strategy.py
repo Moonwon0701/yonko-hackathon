@@ -181,10 +181,27 @@ TRADE_KINDS = {"처치", "급습", "러시", "초소", "별동대"}
 # 1명짜리 과제의 인원: 초소(상대 건물마다)·이동 중 호위. 전선은 FRONT_NEED
 PICKET_NEED = 1
 ESCORT_NEED = 1
+# ---- 공학관 되찾기 실험 스위치 (moonwon/unit-ops, 모두 기본 끔) ----
+# 리더보드 48판: 21~80턴에 우리만 공학관이 없던(전투병 값 3 : 2) 턴이 상대보다 많았던 경기는 진 15판 중 8판, 이긴 33판 중 0판.
+# 공학관을 잃은 뒤 되찾은 경기는 거의 없었다(9/29 신촌도 우리땅 35~40턴 잠깐).
+# 탈환: 최근 RETAKE_MEMORY턴 안에 우리 것이었던 공학관이 지금 우리 것이 아니면(중립화된 턴 = 상대가 점령하기 전 한 턴 포함)
+# 그 칸에 전투병 "위협 + RETAKE_EXTRA"명(가치 RETAKE_VALUE), 그 건물의 깃발병 점령 가치 × RETAKE_CAPTURE.
+RETAKE_VALUE = 0.0
+RETAKE_EXTRA = 1
+RETAKE_MEMORY = 20
+RETAKE_CAPTURE = 2.0
+# 공학관 열세 국면: 우리 전투병 값 > 상대 값이면 ENG_DEFICIT 가지. 전투병은 1:1 상쇄라 이때 흩어진 교전은 1.5배 손해이므로
+# 초소·전선·급습(학생회관)·러시를 빼고, 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명(가치 DEFICIT_VALUE),
+# 공학관 점령 가치 × DEFICIT_CAPTURE. 공학관 할인은 중복되지 않으므로(최소 2) 어느 쪽 공학관이든 하나면 된다.
+ENG_DEFICIT = 0
+DEFICIT_VALUE = 6.0
+DEFICIT_EXTRA = 2
+DEFICIT_CAPTURE = 3.0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
 _depots_taken: set[int] = set()  # 우리가 소유했던 보급소 id (보너스는 1회뿐). 한 프로세스 = 한 경기
+_last_owned: dict[int, int] = {}  # 건물 id → 우리가 마지막으로 소유한 턴 (탈환 과제)
 _dist_cache: dict[Pos, dict[Pos, int]] = {}  # 칸 → 그 칸까지의 거리표. 맵은 경기 내내 같으므로 턴을 넘어 재사용
 _tele_cache: dict[tuple[Pos, tuple[Pos, ...]], dict[Pos, int]] = {}  # (칸, 우리 역들) → 역 포함 거리표
 _dist_cache_rows: list[tuple[str, ...]] = []  # 캐시를 만든 맵의 지형 (맵이 바뀌면 캐시를 비운다)
@@ -445,8 +462,10 @@ def remember(world: World) -> None:
     """턴을 넘어 기억해야 하는 것: 보급소 보너스를 이미 받았는지, 직전 국면, 거리표 캐시."""
     if world.turn <= 1:
         _depots_taken.clear()
+        _last_owned.clear()
         _phase.update(name="EXPAND", calm=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
+    _last_owned.update((b.id, world.turn) for b in world.owned(world.me))
     if _dist_cache_rows != [world.map.rows]:
         _dist_cache.clear()
         _tele_cache.clear()
@@ -486,6 +505,7 @@ def phase_conditions(world: World, pressured: list[tuple[Building, int]]) -> dic
         "THREAT": pressure >= THREAT_PRESSURE,
         "HOLD": world.turn >= LATE_TURN and mine > theirs,
         "ATTACK": my_w >= enemy_w + ATTACK_MARGIN and bool(world.owned(enemy)),
+        "DEFICIT": bool(ENG_DEFICIT) and world.warrior_cost(me) > world.warrior_cost(enemy),
         "EXPAND": True,
     }
 
@@ -518,7 +538,9 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
-                 * (RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= RUSH_UNTIL else 1.0))
+                 * (RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= RUSH_UNTIL else 1.0)
+                 * (RETAKE_CAPTURE if RETAKE_VALUE > 0 and recently_lost(t, b) else 1.0)
+                 * (DEFICIT_CAPTURE if b.kind == "ENG" and getattr(t, "eng_focus", False) else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -702,6 +724,28 @@ def squad_tasks(t: Turn) -> list[Task]:
         cell = step_along(pos, t.dist_to(task.pos), t.order) or pos
         tasks.append(Task("별동대", "W", cell, SQUAD_SIZE, task.value * SQUAD_WEIGHT))
     return tasks
+
+
+def recently_lost(t: Turn, b: Building) -> bool:
+    """우리 것이 아닌 공학관 `b`를 최근 RETAKE_MEMORY턴 안에 우리가 가지고 있었는가."""
+    last = _last_owned.get(b.id)
+    return b.kind == "ENG" and b.owner != t.world.me and last is not None and t.world.turn - last <= RETAKE_MEMORY
+
+
+def retake_tasks(t: Turn) -> list[Task]:
+    """탈환: 최근 잃은 우리 공학관 칸에 전투병 "위협 + RETAKE_EXTRA"명 (RETAKE_VALUE > 0일 때). 중립화된 턴에 가면 상대
+    깃발병이 점령을 마치기 전에 그 칸에서 잡고, 이미 빼앗겼으면 깃발을 뽑아 우리 깃발병이 되찾게 한다."""
+    if RETAKE_VALUE <= 0:
+        return []
+    return [Task("탈환", "W", b.pos, t.threat.get(b.pos, 0) + RETAKE_EXTRA, RETAKE_VALUE)
+            for b in t.others if recently_lost(t, b)]
+
+
+def eng_focus_tasks(t: Turn) -> list[Task]:
+    """공학관 집중(열세 국면): 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명. 어느 쪽이든 하나를 먹으면 된다
+    — 배정은 가치 / (1 + 가장 먼 전투병 거리)라 적이 덜 지키고 가까운 쪽이 먼저 찬다."""
+    return [Task("공학관 집중", "W", b.pos, t.threat.get(b.pos, 0) + DEFICIT_EXTRA, DEFICIT_VALUE)
+            for b in t.others if b.kind == "ENG"]
 
 
 def picket_tasks(t: Turn) -> list[Task]:
@@ -966,7 +1010,7 @@ def phase_branch(name: str, condition: str | None, *recipe: Node) -> Node:
     record = Act(f"국면 = {name}", lambda ctx: enter_phase(ctx, name))
     if condition is None:
         return Sequence(name, record, *recipe)
-    test = Condition(condition, lambda ctx: ctx.active[name])
+    test = Condition(condition, lambda ctx: ctx.active.get(name, False))
     return Sequence(name, Latch(name, test, HOLD_TURNS), record, *recipe)
 
 
@@ -1022,6 +1066,17 @@ def picket() -> Node:
     return enable("초소 과제: 상대 건물마다 전투병 1명 (PICKET_VALUE > 0일 때)", "W", picket_tasks)
 
 
+def retake() -> Node:
+    return enable(f"탈환 과제: {RETAKE_MEMORY}턴 안에 잃은 우리 공학관 (RETAKE_VALUE > 0일 때)", "W", retake_tasks)
+
+
+def eng_focus() -> Node:
+    def on(t: Turn) -> None:
+        t.eng_focus = True
+        t.makers["W"].append(eng_focus_tasks)
+    return Act(f"공학관 집중 과제: 우리 것이 아닌 공학관에 전투병 위협 + {DEFICIT_EXTRA}, 점령 가치 ×{DEFICIT_CAPTURE:g}", on)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -1030,19 +1085,23 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(2),
+    ),
+    phase_branch(
+        "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(1),
     ),
 )
 

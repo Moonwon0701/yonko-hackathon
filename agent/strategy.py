@@ -209,6 +209,23 @@ ENG_WATCH_UNTIL = 30
 # 110턴에 앞선 141판 중 26판을 역전당했다
 BEHIND_MARGIN = 0
 HOLD_FIRST = 0
+# 막판: 마지막 ENDGAME_TURNS턴은 160턴 순간의 점수만 본다(0 = 끔). 현진 봇 상대 300경기에서 한 턴 점수차 변화가 끝까지 평균
+# 1.3이었고, 150턴에 앞섰다 진 경기 17 · 뒤졌다 이긴 경기 16(140턴 27 · 14) — 봇이 경기 끝을 모른다.
+# 깃발병은 160턴 전에 끝낼 수 있는 짝만(상대 건물은 중립화 한 단계만 세어 점수 × 2). 나머지는 위협 대응 가지와 같고,
+# FINAL_GUARD_WEIGHT > 0이면 남은 턴 안에 적 깃발병이 닿는 우리 건물 지키기(가치 = 점수 × 이 값)를 더한다.
+# 처음 판(러시·초소·급습·전선·탈환·지키기를 끄고 막판 수비 2.0)은 현진 상대 54.8 → 8턴 52.9 / 12턴 52.5 / 20턴 50.1% —
+# 전투병이 우리 건물 전체로 흩어져 155턴 건물 8.5:8.0 → 8.0:8.4
+ENDGAME_TURNS = 0
+FINAL_GUARD_WEIGHT = 0.0
+# 역전: COMEBACK_TURN턴 뒤 추정 점수가 뒤지면 위협 대응보다 먼저 — 상대 건물 가치 × 2, 위험 건물 × 0.8, 급습 × 2 (0 = 끔)
+COMEBACK_TURN = 0
+# 초반: OPENING_TURNS턴까지 중립 건물 점령 가치 × OPENING_NEUTRAL (0 = 끔). 30턴 건물 수가 앞선 경기 승 67%, 뒤진 경기 42%
+OPENING_TURNS = 0
+OPENING_NEUTRAL = 1.5
+# 위협 대응 가지의 가중치 (31턴 뒤 턴의 97~100%가 이 가지라 사실상 봇 전체의 가중치)
+THREAT_GUARD = 2.0
+THREAT_EXTRA = 2
+THREAT_DANGER = 0.5
 DEFICIT_VALUE = 6.0
 DEFICIT_EXTRA = 2
 DEFICIT_CAPTURE = 3.0
@@ -251,6 +268,7 @@ class Turn:
         # 국면 가지가 채운다: 병종별 과제 만들기 함수, 전투병 목표 인원의 추가분
         self.makers: dict[str, list[Maker]] = {"F": [], "W": []}
         self.extra_warriors = 0
+        self.deadline: int | None = None  # 막판: 남은 턴 (이 안에 끝낼 수 없는 점령 짝은 배정하지 않는다)
 
     def tasks(self, unit: str) -> list[Task]:
         """이번 국면이 켠 과제 만들기 함수로 `unit` 병종의 과제 목록을 만든다."""
@@ -313,7 +331,7 @@ def plan_flags(t: Turn) -> None:
     t.flags = sorted(t.world.units_of(t.world.me, "F"), key=lambda u: t.key(u[0]))
     t.targets, t.pulled = t.free_targets, set()
     t.f_tasks = t.tasks("F")
-    t.capturing_now = capturing(assign_flags(t.flags, t.f_tasks, t.dist_to), t.dist_to)
+    t.capturing_now = capturing(assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline), t.dist_to)
 
 
 def reserve_capture_cost(t: Turn) -> None:
@@ -445,7 +463,7 @@ def replan_flags(t: Turn) -> None:
     t.pulled = {b.id for b in t.others if b.pos in t.enemy_flags and b.pos in t.arrival}
     t.targets = t.free_targets + [b for b in t.others if b.id in t.pulled]
     flags = with_spawned(t.flags, t.f_site, t.make_f, t.key)
-    t.plan = assign_flags(flags, t.tasks("F"), t.dist_to)
+    t.plan = assign_flags(flags, t.tasks("F"), t.dist_to, t.deadline)
 
 
 def move_flags(t: Turn) -> None:
@@ -518,6 +536,8 @@ def phase_conditions(world: World, pressured: list[tuple[Building, int]]) -> dic
     enemy_w = sum(n for _, n in world.units_of(enemy, "W"))
     hold = world.turn >= LATE_TURN and mine > theirs
     return {
+        "ENDGAME": ENDGAME_TURNS > 0 and world.turn > TOTAL_TURNS - ENDGAME_TURNS,
+        "COMEBACK": COMEBACK_TURN > 0 and world.turn >= COMEBACK_TURN and mine < theirs,
         "BEHIND": BEHIND_MARGIN > 0 and enemy_w >= my_w + BEHIND_MARGIN,
         "THREAT": pressure >= THREAT_PRESSURE and not (HOLD_FIRST and hold),
         "HOLD": hold,
@@ -557,7 +577,8 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
                  * (RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= RUSH_UNTIL else 1.0)
                  * (RETAKE_CAPTURE if RETAKE_VALUE > 0 and recently_lost(t, b) else 1.0)
-                 * (DEFICIT_CAPTURE if b.kind == "ENG" and getattr(t, "eng_focus", False) else 1.0))
+                 * (DEFICIT_CAPTURE if b.kind == "ENG" and getattr(t, "eng_focus", False) else 1.0)
+                 * (OPENING_NEUTRAL if b.owner is None and t.world.turn <= OPENING_TURNS else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -732,7 +753,7 @@ def squad_tasks(t: Turn) -> list[Task]:
     world = t.world
     count = 2 if world.turn >= SECOND_SQUAD_TURN else 1
     cands = []
-    for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to):
+    for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline):
         b = task.building
         if b.owner == world.enemy or t.threat.get(b.pos, 0):
             cands.append((-task.value, t.key(pos), pos, task))
@@ -771,6 +792,34 @@ def eng_focus_tasks(t: Turn) -> list[Task]:
             for b in t.others if b.kind == "ENG"]
 
 
+def final_capture_tasks(t: Turn, danger: float) -> list[Task]:
+    """막판 점령: 160턴 순간의 점수만 센다. 중립은 점령 1단계로 + 점수, 상대 건물은 중립화 1단계로 상대 점수 − (× 2로 셈).
+    끝낼 수 없는 짝은 assign_flags가 t.deadline으로 뺀다."""
+    tasks = []
+    arrival = getattr(t, "arrival", {})
+    for b in t.targets:
+        covered = b.id in t.pulled or b.pos in arrival
+        value = (estimated_score(t.world, b) * (2.0 if b.owner is not None else 1.0)
+                 * (danger if t.threat.get(b.pos, 0) and not covered else 1.0))
+        tasks.append(Task("막판 점령", "F", b.pos, 1, value, b, 1))
+    return tasks
+
+
+def final_guard_tasks(t: Turn) -> list[Task]:
+    """막판 수비: 남은 턴 안에 적 깃발병이 닿을 수 있는 우리 건물마다 전투병 "위협 + 1"명 (가치 = 점수 × FINAL_GUARD_WEIGHT).
+    160턴 뒤 전투병은 동점일 때만 세므로 아끼지 않는다."""
+    if FINAL_GUARD_WEIGHT <= 0:
+        return []
+    left = TOTAL_TURNS - t.world.turn
+    tasks = []
+    for b in t.world.owned(t.world.me):
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= left + 1 for p in t.enemy_flags):
+            tasks.append(Task("막판 수비", "W", b.pos, t.threat.get(b.pos, 0) + 1,
+                              estimated_score(t.world, b) * FINAL_GUARD_WEIGHT))
+    return tasks
+
+
 def picket_tasks(t: Turn) -> list[Task]:
     """초소: 상대 건물마다(적 깃발병이 선 곳은 처치 과제가 맡으므로 뺀다) 전투병 1명 (PICKET_VALUE > 0일 때)."""
     if PICKET_VALUE <= 0:
@@ -794,6 +843,7 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
 
 def assign_flags(
     flags: list[tuple[Pos, int]], tasks: list[Task], dist_to: Callable[[Pos], dict[Pos, int]],
+    deadline: int | None = None,
 ) -> list[tuple[Pos, Task]]:
     """깃발병 한 명씩 (칸, 점령 과제) 짝. 효용 = 가치 / (거리 + 남은 점령 단계 + ETA_OFFSET).
     한 과제엔 한 명씩, 효용 합이 가장 큰 짝을 한꺼번에 고른다(헝가리안, algorithms.max_assignment).
@@ -807,7 +857,11 @@ def assign_flags(
 
     def utility(pos: Pos, task: Task) -> float | None:
         d = dists[task.pos].get(pos)
-        return None if d is None else task.value / (d + task.stages + ETA_OFFSET)
+        if d is None:
+            return None
+        if deadline is not None and max(d - 1, 0) + task.stages - 1 > deadline:  # 막판: 160턴 전에 못 끝냄
+            return None
+        return task.value / (d + task.stages + ETA_OFFSET)
 
     pairs = max_assignment([[utility(pos, task) for task in tasks] for pos in pool]) if tasks else []
     plan = [(pool[i], tasks[j]) for i, j in pairs]
@@ -1100,6 +1154,17 @@ def eng_focus() -> Node:
     return Act(f"공학관 집중 과제: 우리 것이 아닌 공학관에 전투병 위협 + {DEFICIT_EXTRA}, 점령 가치 ×{DEFICIT_CAPTURE:g}", on)
 
 
+def final_capture(danger: float) -> Node:
+    def on(t: Turn) -> None:
+        t.deadline = TOTAL_TURNS - t.world.turn
+        t.makers["F"].append(lambda t: final_capture_tasks(t, danger))
+    return Act(f"막판 점령 과제: 160턴 전에 끝낼 수 있는 건물만, 최종 점수로 (적 전투병이 닿는 건물 ×{danger:g})", on)
+
+
+def final_guard() -> Node:
+    return enable(f"막판 수비 과제: 남은 턴 안에 적 깃발병이 닿는 우리 건물 (점수 ×{FINAL_GUARD_WEIGHT:g})", "W", final_guard_tasks)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -1107,12 +1172,20 @@ def warriors(extra: int) -> Node:
 PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
+        "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
+    ),
+    phase_branch(
+        "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
+    ),
+    phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
         capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(2),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",

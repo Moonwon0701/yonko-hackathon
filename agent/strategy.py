@@ -138,6 +138,14 @@ ENG_RUSH_UNTIL = 80
 ENG_RUSH_EXTRA = 2
 ENG_RUSH_VALUE = 6.0
 ENG_RUSH_CAPTURE = 3.0
+# 수비대: GARRISON_UNTIL턴까지 우리 공학관·학생회관(GARRISON_KINDS) 위에 전투병 GARRISON_NEED명을 적이 오기 전에 세운다
+# (가치 × GARRISON_WEIGHT). 몰아내기는 적 전투병이 온 뒤에 움직인다. 흉내 봇 풀에서 공학관을 잃는 경기가 절반쯤이었다. 0이면 끔.
+# 끔: 40 / 80 / 160턴 × 1명 → 7001772 상대 55.5 / 53 / 46%, 3명 → 43.5 / 43 / 39%. 흉내 봇 풀 공학관 잃음 51%가 그대로
+# (러시는 "위협 + 2"명이라 1명으로 못 막고, 3명은 적 깃발병 추격 인원을 뺏는다 — docs/benchmarks.md)
+GARRISON_KINDS = {"ENG", "HALL"}
+GARRISON_UNTIL = 0
+GARRISON_NEED = 1
+GARRISON_WEIGHT = 1.0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -591,6 +599,24 @@ def eng_rush_tasks(t: Turn) -> list[Task]:
     return tasks
 
 
+def garrison_tasks(t: Turn) -> list[Task]:
+    """수비대: GARRISON_UNTIL턴까지 우리 공학관·학생회관 위에 전투병 GARRISON_NEED명. 지키기(적 깃발병 접근)나
+    몰아내기(적 전투병 EVICT_RADIUS 안) 과제가 걸린 건물은 그쪽이 더 많은 인원으로 맡으므로 뺀다."""
+    world = t.world
+    if world.turn > GARRISON_UNTIL:
+        return []
+    guarded = {b.id for b, _ in t.pressured}
+    tasks = []
+    for b in sorted(world.owned(world.me), key=lambda b: t.key(b.pos)):
+        if b.kind not in GARRISON_KINDS or b.id in guarded:
+            continue
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
+            continue
+        tasks.append(Task("수비대", "W", b.pos, GARRISON_NEED, t.values[b.id] * GARRISON_WEIGHT))
+    return tasks
+
+
 # ------------------------------------------------------------------ 깃발병
 
 
@@ -888,6 +914,11 @@ def eng_rush() -> Node:
                   f"깃발병은 공학관 가치 ×{ENG_RUSH_CAPTURE:g}", "W", eng_rush_tasks)
 
 
+def garrison() -> Node:
+    return enable(f"수비대: {GARRISON_UNTIL}턴까지 우리 {'·'.join(sorted(GARRISON_KINDS))} 위에 전투병 {GARRISON_NEED}명 "
+                  "(지키기·몰아내기가 걸린 건물 제외)", "W", garrison_tasks)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -896,19 +927,19 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), warriors(2),
+        capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), garrison(), warriors(2),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), eng_rush(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), eng_rush(), garrison(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), eng_rush(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), eng_rush(), garrison(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), eng_rush(), garrison(), warriors(1),
     ),
 )
 

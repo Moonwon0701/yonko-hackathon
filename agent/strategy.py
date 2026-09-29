@@ -231,6 +231,8 @@ def read_situation(t: Turn) -> None:
     world = t.world
     me, enemy = world.me, world.enemy
     remember(world)
+    if world.turn <= 1:
+        analyze_map(t)
     t.order = direction_order(world)
     t.key = key = normalizer(world)  # 동점일 때의 순서를 자기 본진 기준으로 맞춘다 → 양 진영이 거울처럼 움직인다
     # 역 순간이동: 우리 역이 2개 이상이면 역끼리 비용 1로 이어진 경로도 최단거리에 넣는다 (전투병 이동에만.
@@ -405,6 +407,14 @@ def set_priority(t: Turn) -> None:
     now = sorted(capturing(t.plan, t.dist_to), key=lambda task: -t.values[task.building.id])
     if len(now) >= 2:
         t.actions.append(Priority(tuple(task.pos for task in now)))
+
+
+def analyze_map(t: Turn) -> None:
+    """첫 턴 맵 분석(제한 3초, 이후 턴 300 ms). 지형·건물 배치는 경기 내내 같으므로 모든 건물과 양 본진까지의 걸음
+    거리표를 미리 만들어 캐시에 넣는다. 판단은 바뀌지 않고, 처음 가는 건물이 생기는 턴의 계산만 앞당긴다."""
+    world = t.world
+    for pos in sorted({b.pos for b in world.buildings.values()} | set(world.map.bases.values())):
+        t.dist_to(pos)
 
 
 def remember(world: World) -> None:

@@ -303,6 +303,8 @@ BANK_SAFE = 0
 # 65.2 · 68.2 / 63.9**(풀 80 → 88.1 · 81.6%), 반경 3 × 0.5 62.0 / 62.3. 반경 2 × 0.5는 제출본(7941b88) 71.2 / 70.5%, 현진 78.5 / 82.0%
 FLAG_GUARD = 2
 FLAG_GUARD_WEIGHT = 0.5
+# 수비 깃발 대상: 0 = 경제 건물(학생회관·공학관), 1 = + 광장, 2 = + 추정 점수 2점 이상 건물(광장 포함), 3 = 모든 우리 건물
+FLAG_GUARD_SCOPE = 0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -747,7 +749,10 @@ def flag_guard_tasks(t: Turn) -> list[Task]:
         return []
     tasks = []
     for b in t.world.owned(t.world.me):
-        if b.kind not in ECON_KINDS:
+        if not (b.kind in ECON_KINDS
+                or (FLAG_GUARD_SCOPE >= 1 and b.kind == "PLAZA")
+                or (FLAG_GUARD_SCOPE == 2 and estimated_score(t.world, b) >= 2)
+                or FLAG_GUARD_SCOPE >= 3):
             continue
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= FLAG_GUARD for p in t.enemy_flags):

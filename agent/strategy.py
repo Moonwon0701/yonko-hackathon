@@ -43,7 +43,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from agent.algorithms import (
@@ -161,6 +161,26 @@ PICKET_VALUE = 1.0
 SQUAD_SIZE = 5
 SQUAD_WEIGHT = 1.0
 SECOND_SQUAD_TURN = 30  # 이 턴부터 별동대 2개 (목표 건물이 서로 다른 깃발병 2명)
+# ---- 유닛 운용 실험 스위치 (moonwon/unit-ops, 모두 기본 끔 = 예전 동작) ----
+# 서버 리플레이 48판 10~80턴 전투 6155건을 우리 명령으로 복원하면, 전투의 36%에 우리가 전투병 1명으로 들어가 승 8%였다
+# (6명 이상은 71%). 상대가 이미 있던 칸에 들어간 전투는 55%를 졌고(2.6 : 7.5), 그 절반은 직전 턴 2칸 안에 우리 전투병이 더
+# 있었다. 전투병은 1:1로 상쇄되므로 모아서 얻는 것은 그 칸(깃발병·건물)이다.
+# 모아서 들어가기: 1 = 적 전투병이 선 과제 칸 바로 앞에서, 그 과제의 가장 먼 전투병이 한 걸음 거리가 될 때까지 기다린다.
+# 2 = 1 + 가는 길에 적 전투병이 지금 선 칸이면, 이번 턴 그 칸에 들어갈 우리 인원이 적보다 많을 때만 들어간다.
+STAGE = 0
+# 요격: 적 깃발병을 뒤쫓지 않고 그 깃발병이 갈 건물(가장 가까운 우리·중립 건물, INTERCEPT_RADIUS걸음 안)에 먼저 간다.
+# INTERCEPT_IDLE = 과제 없는 전투병의 공통 목표를 적 깃발병 칸 대신 그 건물로. INTERCEPT_VALUE > 0 = 그 건물이 우리 것이면
+# "요격" 과제(그 칸 위협 + 1명, 가치 = 건물 가치 × INTERCEPT_VALUE)를 더한다.
+INTERCEPT_IDLE = 0
+INTERCEPT_VALUE = 0.0
+INTERCEPT_RADIUS = 6
+# 비용 교환: 우리 전투병 값이 상대보다 싸면 공격 과제(TRADE_KINDS) 가치 × TRADE_BOOST, 비싸면 ÷ TRADE_BOOST (1 = 끔).
+# 교환은 1:1이지만 값이 2 대 3이면 같은 자원으로 1.5배를 만든다
+TRADE_BOOST = 1.0
+TRADE_KINDS = {"처치", "급습", "러시", "초소", "별동대"}
+# 1명짜리 과제의 인원: 초소(상대 건물마다)·이동 중 호위. 전선은 FRONT_NEED
+PICKET_NEED = 1
+ESCORT_NEED = 1
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -274,10 +294,12 @@ def reserve_capture_cost(t: Turn) -> None:
 
 def plan_warrior_tasks(t: Turn) -> None:
     """전투병 과제 목록(이번 국면이 켠 종류)과, 과제가 없는 전투병의 공통 목표."""
-    t.w_tasks = sorted(t.tasks("W"), key=lambda task: t.key(task.pos))
+    t.w_tasks = sorted(trade_weighted(t, t.tasks("W")), key=lambda task: t.key(task.pos))
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
     t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
+    if INTERCEPT_IDLE and t.enemy_flags:
+        t.goals = {b.pos for b in intercept_targets(t).values()} or t.goals
     t.goal_dist = distance_map(t.goals, t.world.map.passable)
 
 
@@ -343,9 +365,13 @@ def move_warriors(t: Turn) -> None:
     for i, ((pos, goal), n) in enumerate(moving.items()):
         walk = t.goal_dist if goal is None else t.dist_to(goal)
         tele = goal_tele if goal is None else t.tele_to(goal)
-        groups.append((pos not in gates, tele.get(pos, 0), key(pos), i, pos, n, walk, tele))
+        groups.append((pos not in gates, tele.get(pos, 0), key(pos), i, pos, n, walk, tele, goal))
     queued = 0  # 이번 턴 순간이동 경로에 태운 인원 = 대기열. 역에 이미 선 인원부터 센다
-    for *_, pos, n, walk, tele in sorted(groups):
+    enemy_w = dict(t.enemy_warriors)
+    for *_, pos, n, walk, tele, goal in sorted(groups):
+        if STAGE and goal is not None and enemy_w.get(goal) and walk.get(pos) == 1 and t.arrival.get(goal, 0) > 1:
+            w_after[pos] += n  # 과제의 나머지 전투병이 한 걸음 거리에 올 때까지 앞 칸에서 기다린다
+            continue
         # 순간이동은 턴당 TELE_MAX_UNITS명뿐이다. 대기열에서 기다릴 턴까지 더해도 걷기보다 빠른 인원만
         # 역으로 보낸다. (전원을 역으로 보내면 못 탄 인원이 걸어서 물러났다가 다음 턴 돌아오기를 반복했다 —
         # 9/27 리더보드 리플레이에서 역 옆 두 칸을 오간 전투병 최대 66명)
@@ -372,6 +398,12 @@ def move_warriors(t: Turn) -> None:
             t.actions.append(Tele(src, "W", sent, dst))
             w_after[dst] += sent
         w_after[src] += n - sent  # 못 탄 인원은 역에서 다음 차례를 기다린다
+    if STAGE >= 2:  # 적 전투병이 선 칸에, 들어갈 우리 인원이 적보다 적으면 들어가지 않는다
+        for (src, dst), n in list(w_steps.items()):
+            if enemy_w.get(dst, 0) > w_after[dst]:
+                del w_steps[(src, dst)]
+                w_after[dst] -= n
+                w_after[src] += n
     t.actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
     t.w_after = w_after
 
@@ -499,7 +531,41 @@ def kill_tasks(t: Turn) -> list[Task]:
         b = t.world.building_at(pos)
         bonus = t.values[b.id] if b else 0.0
         tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
+    if INTERCEPT_VALUE > 0:
+        for b in intercept_targets(t).values():
+            if b.owner == t.world.me and b.pos not in t.enemy_flags:
+                tasks.append(Task("요격", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * INTERCEPT_VALUE))
     return tasks
+
+
+def intercept_targets(t: Turn) -> dict[Pos, Building]:
+    """적 깃발병마다 갈 것 같은 건물: 상대 것이 아닌 건물 중 걸어서 가장 가까운 것(INTERCEPT_RADIUS걸음 안, 동점이면
+    정규화 좌표 순). 이미 건물 위에 선 깃발병은 그 건물을 점령 중이므로 뺀다."""
+    if hasattr(t, "_intercept"):
+        return t._intercept
+    world = t.world
+    cands = [b for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)) if b.owner != world.enemy]
+    found = {}
+    for pos in t.enemy_flags:
+        if world.building_at(pos):
+            continue
+        best = min(((t.dist_to(b.pos).get(pos, 99), i) for i, b in enumerate(cands)), default=None)
+        if best and best[0] <= INTERCEPT_RADIUS:
+            found[pos] = cands[best[1]]
+    t._intercept = found
+    return found
+
+
+def trade_weighted(t: Turn, tasks: list[Task]) -> list[Task]:
+    """비용 교환: 우리 전투병 값이 상대보다 싸면 TRADE_KINDS 과제 가치 × TRADE_BOOST, 비싸면 ÷ TRADE_BOOST."""
+    if TRADE_BOOST == 1.0:
+        return tasks
+    world = t.world
+    ours, theirs = world.warrior_cost(world.me), world.warrior_cost(world.enemy)
+    if ours == theirs:
+        return tasks
+    factor = TRADE_BOOST if ours < theirs else 1 / TRADE_BOOST
+    return [replace(task, value=task.value * factor) if task.kind in TRADE_KINDS else task for task in tasks]
 
 
 def escort_tasks(t: Turn) -> list[Task]:
@@ -512,7 +578,7 @@ def escort_tasks(t: Turn) -> list[Task]:
             tasks.append(Task("호위", "W", b.pos, t.threat[b.pos], t.values[b.id]))
     if ESCORT_VALUE > 0:  # 이동 중 깃발병: 위 호위 과제가 없는 칸마다 전투병 1명
         covered = {task.pos for task in tasks}
-        tasks += [Task("호위", "W", pos, 1, ESCORT_VALUE) for pos, _ in t.flags if pos not in covered]
+        tasks += [Task("호위", "W", pos, ESCORT_NEED, ESCORT_VALUE) for pos, _ in t.flags if pos not in covered]
     return tasks
 
 
@@ -642,7 +708,7 @@ def picket_tasks(t: Turn) -> list[Task]:
     """초소: 상대 건물마다(적 깃발병이 선 곳은 처치 과제가 맡으므로 뺀다) 전투병 1명 (PICKET_VALUE > 0일 때)."""
     if PICKET_VALUE <= 0:
         return []
-    return [Task("초소", "W", b.pos, 1, PICKET_VALUE) for b in t.others
+    return [Task("초소", "W", b.pos, PICKET_NEED, PICKET_VALUE) for b in t.others
             if b.owner == t.world.enemy and b.pos not in t.enemy_flags]
 
 

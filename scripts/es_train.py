@@ -4,9 +4,10 @@
     python scripts/es_train.py --gens 300                    # 새로 시작 (W = 0 = 기준 봇)
     python scripts/es_train.py --gens 300 --resume runs/es/<시각>/theta.json
     python scripts/es_train.py --validate runs/es/<시각>/theta.json --maps data/server-replays   # 검증만
+    python scripts/es_train.py --bot experiments/learned_uo --pool unitops --gens 300   # daa1888 기반
 
 방법 (OpenAI-ES, Salimans et al. 2017):
-- 매개변수 θ = 상수 16개 × 특징 8개. θ = 0이면 기준 봇(현진 7b8b67e)과 똑같다.
+- 매개변수 θ = 상수(봇 폴더 agent/learned.py의 KNOBS) × 특징 8개. θ = 0이면 기준 봇과 똑같다.
 - 한 세대: 잡음 ε를 POP쌍 뽑아 θ ± σε 후보 2·POP개를 만든다(대칭 표본). 모든 후보가 **같은 경기 묶음**(이번 세대 새
   생성 맵 × 풀 상대, 맵마다 진영 하나)을 둔다 → 후보끼리 차이가 맵 운이 아니라 가중치 차이에서 나온다.
 - 보상 = 승점(승 1, 무 0.5, 패 0) + MARGIN_W × 점수 차 / 총점. 후보 점수를 순위로 바꿔(가운데 0) 기울기를 어림하고
@@ -18,8 +19,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
+import os
 import random
 import sys
 import time
@@ -28,25 +31,46 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "experiments" / "learned"))
-from agent.learned import FEATURES, KNOBS  # noqa: E402  (실험 폴더의 agent)
-
 from sim import mapgen, match  # noqa: E402
 from sim.bots import BotSpec, resolve  # noqa: E402
 
-BOT_DIR = ROOT / "experiments" / "learned"
+# 학습할 봇 폴더(main.py + agent/learned.py). 작업자 프로세스도 같은 폴더를 쓰도록 환경 변수로 넘긴다
+BOT_DIR = ROOT / os.environ.get("ES_BOT", "experiments/learned")
 LAUNCHER = ROOT / "scripts" / "es_bot.py"
-# 상대 풀: 이름 → 지정, 한 세대에 나오는 비율(가중치). 기준 봇 자신을 가장 많이 둔다(자기 대전 = 기준보다 나아졌는가)
-POOL = {
-    "hyunjin": ("git:7b8b67e", 3),
-    "moonwon": ("git:2b71430", 2),
-    "sunghyuk": ("git:73e2691", 1),
-    "eng_rush": ("opponents/eng_rush.py", 1),
-    "blob": ("opponents/blob.py", 1),
-    "econ_raid": ("opponents/econ_raid.py", 1),
+# 상대 풀: 이름 → (지정, 한 세대에 나오는 비율). 기준 봇 자신을 가장 많이 둔다(자기 대전 = 기준보다 나아졌는가)
+POOLS = {
+    "hyunjin": {  # experiments/learned (현진 7b8b67e 기반)
+        "hyunjin": ("git:7b8b67e", 3),
+        "moonwon": ("git:2b71430", 2),
+        "sunghyuk": ("git:73e2691", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+        "blob": ("opponents/blob.py", 1),
+        "econ_raid": ("opponents/econ_raid.py", 1),
+    },
+    "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
+        "daa1888": ("git:daa1888", 4),
+        "7941b88": ("git:7941b88", 2),
+        "hyunjin": ("git:7b8b67e", 2),
+        "sunghyuk": ("git:73e2691", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
 }
+POOL = POOLS["hyunjin"]
 MARGIN_W = 0.5
-DIM = len(KNOBS) * len(FEATURES)
+FEATURES: tuple = ()
+KNOBS: tuple = ()
+DIM = 0
+
+
+def load_layer() -> None:
+    """BOT_DIR/agent/learned.py의 특징·상수 목록을 읽는다(봇마다 조절하는 상수가 다르다)."""
+    global FEATURES, KNOBS, DIM
+    spec = importlib.util.spec_from_file_location("es_layer", BOT_DIR / "agent" / "learned.py")
+    sys.path.insert(0, str(BOT_DIR))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    FEATURES, KNOBS = mod.FEATURES, mod.KNOBS
+    DIM = len(KNOBS) * len(FEATURES)
 
 
 def to_w(theta: list[float]) -> dict[str, list[float]]:
@@ -142,8 +166,15 @@ def main() -> None:
     ap.add_argument("--validate", help="학습 없이 이 θ만 검증")
     ap.add_argument("--maps", help="검증에 쓸 서버 리플레이 폴더 (없으면 생성 시드 900000~)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--bot", default="experiments/learned", help="학습할 봇 폴더")
+    ap.add_argument("--pool", default="hyunjin", choices=sorted(POOLS), help="상대 풀")
     ap.add_argument("--normal-priority", action="store_true", help="우선순위를 낮추지 않는다")
     args = ap.parse_args()
+    global BOT_DIR, POOL
+    os.environ["ES_BOT"] = args.bot
+    BOT_DIR = ROOT / args.bot
+    POOL = POOLS[args.pool]
+    load_layer()
     if sys.platform == "win32" and not args.normal_priority:
         # 우선순위 "낮음"(BELOW_NORMAL). 자식 프로세스(작업자·봇)도 물려받아, 같은 컴퓨터의 다른 작업이 먼저 CPU를 쓴다
         import ctypes

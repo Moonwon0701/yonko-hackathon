@@ -295,6 +295,10 @@ ENG_BANK = 3
 # 전투병이 우리보다 많으면 적립하지 않는다(0 = 끔)
 HOSP_BANK = 0
 BANK_SAFE = 0
+# 수비 깃발(flag_guard_tasks): 적 깃발병이 FLAG_GUARD걸음 안에 온 우리 경제 건물 위에 우리 깃발병을 세운다(0 = 끔). 경합 규칙으로
+# 적 깃발병 혼자 빼앗기(9/29 22:00 빈 건물 30번)와 동수 상쇄 뒤 중립화(상쇄 패배 23번)를 막는다. 가치 = 건물 가치 × 이 배수
+FLAG_GUARD = 0
+FLAG_GUARD_WEIGHT = 1.0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -406,7 +410,7 @@ def plan_flags(t: Turn) -> None:
 def reserve_capture_cost(t: Turn) -> None:
     """이번 턴 점령 비용만 남기고 나머지를 생산 예산으로."""
     world, me = t.world, t.world.me
-    need = sum(world.stage_cost(task.building) for task in t.capturing_now)
+    need = sum(world.stage_cost(task.building) for task in t.capturing_now if task.stages > 0)  # 수비 깃발은 비용 없음
     income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
     t.budget = max(0, world.gold[me] - max(0, need - income))  # 점령은 이번 턴 수입 뒤에 치른다
 
@@ -728,6 +732,22 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (OPENING_NEUTRAL if b.owner is None and t.world.turn <= OPENING_TURNS else 1.0)
                  * (SH_COST_BASE / (SH_COST_BASE + t.world.stage_cost(b) * stages) if SH_COST_BASE > 0 else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, stages))
+    return tasks + flag_guard_tasks(t)
+
+
+def flag_guard_tasks(t: Turn) -> list[Task]:
+    """수비 깃발(FLAG_GUARD > 0): 적 깃발병이 FLAG_GUARD걸음 안에 온 우리 경제 건물(ECON_KINDS) 위에 우리 깃발병을 세운다.
+    규칙상 건물 칸에 양 팀 깃발병이 함께 있으면 그 턴 점령이 진행되지 않으므로(경합), 적 깃발병 혼자로는 빼앗지 못하고
+    전투병이 동수로 상쇄돼도 중립화되지 않는다 — 적은 동수가 아니라 +1이 필요하다. 남은 점령 단계는 0(점령비 없음)."""
+    if FLAG_GUARD <= 0:
+        return []
+    tasks = []
+    for b in t.world.owned(t.world.me):
+        if b.kind not in ECON_KINDS:
+            continue
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= FLAG_GUARD for p in t.enemy_flags):
+            tasks.append(Task("수비 깃발", "F", b.pos, 1, t.values[b.id] * FLAG_GUARD_WEIGHT, b, 0))
     return tasks
 
 

@@ -57,7 +57,9 @@ from agent.algorithms import (
 from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,
+    ENG_COST_FLOOR,
     HALL_BONUS,
+    RESOURCE_CAP,
     TELE_MAX_UNITS,
     TOTAL_TURNS,
     UNIT_COST,
@@ -281,6 +283,10 @@ _flag_goal: dict[Pos, set[Pos]] = {}  # 지난 턴 이동 뒤 칸 → 그 칸 �
 FLAG_LOOKAHEAD = 0
 # 적 병원 생산: 위협 맵에 상대 병원에서 이번 턴 만들 수 있는 전투병을 더한다 (0 = 끔, 본진만)
 HOSPITAL_THREAT = 0
+# 공학관 타이밍 생산: 우리에게 공학관이 없고 곧 얻으면(eng_coming) 전투병 생산을 미뤄 값 2로 산다(0 = 끔, 1 = 이번 턴 끝, 2 = 다음
+# 턴 끝까지). 리더보드 60판에서 공학관을 얻기 1~2턴 전에 값 3으로 산 전투병에 판당 약 30자원(20턴까지 16)을 썼다 — 값 2였다면
+# 판당 전투병 +5명(1:1 상쇄라 끝까지 남는다). 자원 상한(RESOURCE_CAP)을 넘길 만큼은 이번 턴에 쓴다
+ENG_BANK = 0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -385,7 +391,8 @@ def plan_flags(t: Turn) -> None:
     t.flags = sorted(t.world.units_of(t.world.me, "F"), key=lambda u: t.key(u[0]))
     t.targets, t.pulled = t.free_targets, set()
     t.f_tasks = t.tasks("F")
-    t.capturing_now = capturing(assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline), t.dist_to)
+    t.flag_plan1 = assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline)
+    t.capturing_now = capturing(t.flag_plan1, t.dist_to)
 
 
 def reserve_capture_cost(t: Turn) -> None:
@@ -435,6 +442,11 @@ def produce(t: Turn) -> None:
     budget -= more_f * fc
     if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
         make_w += budget // wc
+    if ENG_BANK and wc > ENG_COST_FLOOR and eng_coming(t):
+        # 곧 공학관을 얻으면 전투병은 값이 내려간 뒤에 산다. 다음 턴 자원이 상한을 넘길 만큼은 이번에 쓴다
+        income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
+        must = max(0, world.gold[me] + income - RESOURCE_CAP - make_f * fc)
+        make_w = min(make_w, -(-must // wc))
     t.make_w, t.make_f = make_w, make_f
     # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
     passable = world.map.passable
@@ -447,6 +459,20 @@ def produce(t: Turn) -> None:
         t.actions.append(Spawn("W", make_w, None if t.w_site == sites[0] else t.w_site))
     if make_f:
         t.actions.append(Spawn("F", make_f, None if t.f_site == sites[0] else t.f_site))
+
+
+def eng_coming(t: Turn) -> bool:
+    """공학관을 곧 얻는가: ENG_BANK = 1이면 이번 턴 끝(깃발병이 1걸음 안이고 점령 1단계 남음), 2면 다음 턴 끝까지
+    (2걸음 안이고 1단계 남음, 또는 1걸음 안이고 2단계 남음 = 이번 턴 중립화 → 다음 턴 점령)."""
+    for pos, task in t.flag_plan1:
+        if task.building is None or task.building.kind != "ENG":
+            continue
+        d = t.dist_to(task.pos).get(pos, 99)
+        if d <= 1 and task.stages == 1:
+            return True
+        if ENG_BANK >= 2 and ((d <= 2 and task.stages == 1) or (d <= 1 and task.stages == 2)):
+            return True
+    return False
 
 
 def plan_warriors(t: Turn) -> None:

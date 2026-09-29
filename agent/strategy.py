@@ -270,6 +270,11 @@ ATTACK_TIE = 0
 TASK_LIMIT = 0
 FLAG_SUPPORT = {"호위", "별동대"}
 TASK_MERGE = 1  # 1 = 남는 전투병을 고른 과제에 합류, 0 = 예전처럼 공통 목표(적 깃발병·점령할 건물)로
+# 깃발병 관성: 지난 턴 이 칸 깃발병이 맡은 목표와의 짝은 효용 × FLAG_INERTIA (1 = 끔). 9/29 22:00 리플레이를 재현하면 깃발병
+# 이동의 11%(판당 약 48번)가 다음 턴 되돌아왔고, 그중 41%(판당 17번)는 매 턴 새로 푸는 헝가리안 배정에서 깃발병끼리 목표를
+# 맞바꾼 것이었다(나머지는 같은 목표에서 위협 때문에 물러남)
+FLAG_INERTIA = 1.0
+_flag_goal: dict[Pos, set[Pos]] = {}  # 지난 턴 이동 뒤 칸 → 그 칸 깃발병들의 목표 칸
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -521,12 +526,16 @@ def move_flags(t: Turn) -> None:
         return threat.get(pos, 0) <= w_after[pos]
 
     f_steps: Counter[tuple[Pos, Pos]] = Counter()
+    goals: dict[Pos, set[Pos]] = {}  # 이동 뒤 칸 → 그 칸 깃발병들의 목표 (다음 턴 FLAG_INERTIA)
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
         step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold)
         if step:
             f_steps[(pos, step)] += 1
+        goals.setdefault(step or pos, set()).add(task.pos)
+    _flag_goal.clear()
+    _flag_goal.update(goals)
     t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
 
 
@@ -543,6 +552,7 @@ def remember(world: World) -> None:
         _depots_taken.clear()
         _last_owned.clear()
         _served.clear()
+        _flag_goal.clear()
         _phase.update(name="EXPAND", calm=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
     _last_owned.update((b.id, world.turn) for b in world.owned(world.me))
@@ -938,7 +948,8 @@ def assign_flags(
             return None
         if deadline is not None and max(d - 1, 0) + task.stages - 1 > deadline:  # 막판: 160턴 전에 못 끝냄
             return None
-        return task.value / (d + task.stages + ETA_OFFSET)
+        keep = FLAG_INERTIA if task.pos in _flag_goal.get(pos, ()) else 1.0  # 지난 턴 이 칸 깃발병의 목표
+        return keep * task.value / (d + task.stages + ETA_OFFSET)
 
     pairs = max_assignment([[utility(pos, task) for task in tasks] for pos in pool]) if tasks else []
     plan = [(pool[i], tasks[j]) for i, j in pairs]

@@ -228,6 +228,15 @@ OPENING_NEUTRAL = 1.5
 THREAT_GUARD = 2.0
 THREAT_EXTRA = 2
 THREAT_DANGER = 0.5
+# 성혁 브랜치(sunghyuk/attack-expand)에서 옮긴 스위치 (0 = 끔).
+# 관성(73e2691): 지난 턴에 전투병을 받은 과제 칸은 거리를 SH_INERTIA만큼 깎아 계속 맡게 한다
+SH_INERTIA = 0
+# 점령 비용(b1f0f69): 점령 가치 × SH_COST_BASE / (SH_COST_BASE + 남은 단계의 자원 비용), 광장은 SH_PLAZA_SKIP턴 전 목표에서 뺀다.
+# 무작위 맵 1000개 두 묶음에서 현진 봇 상대 58.5 → 64.7%(짝 비교 240 · 178, p = 0.003), 58.7 → 66.1%, 627cfbe와 직접 54.6%.
+# 관성(SH_INERTIA = 1)은 58.5 → 60.5%(p = 0.35), 둘 다 켜면 64.6%로 점령 비용만과 같음
+SH_COST_BASE = 8.0
+SH_PLAZA_SKIP = 40
+_served: set[Pos] = set()  # 지난 턴에 전투병을 받은 과제 칸 (관성)
 DEFICIT_VALUE = 6.0
 DEFICIT_EXTRA = 2
 DEFICIT_CAPTURE = 3.0
@@ -399,8 +408,10 @@ def produce(t: Turn) -> None:
 
 def plan_warriors(t: Turn) -> None:
     """전투병 배정: 과제마다 가장 가까운 전투병을 붙인다(이번 턴 새로 만든 전투병 포함)."""
+    global _served
     warriors = with_spawned(t.world.units_of(t.world.me, "W"), t.w_site, t.make_w, t.key)
-    t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to)
+    t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to, frozenset(_served))
+    _served = {dst for _, dst in t.w_plan}
 
 
 def move_warriors(t: Turn) -> None:
@@ -498,6 +509,7 @@ def remember(world: World) -> None:
     if world.turn <= 1:
         _depots_taken.clear()
         _last_owned.clear()
+        _served.clear()
         _phase.update(name="EXPAND", calm=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
     _last_owned.update((b.id, world.turn) for b in world.owned(world.me))
@@ -571,8 +583,11 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     tasks = []
     arrival = getattr(t, "arrival", {})  # 전투병이 가는 칸 (깃발병 2차에서만 있다)
     for b in t.targets:
+        if b.kind == "PLAZA" and t.world.turn < SH_PLAZA_SKIP:
+            continue
         pulled = b.id in t.pulled
         covered = pulled or b.pos in arrival
+        stages = 1 if pulled or b.owner is None else 2
         value = (t.values[b.id]
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
@@ -580,8 +595,9 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= RUSH_UNTIL else 1.0)
                  * (RETAKE_CAPTURE if RETAKE_VALUE > 0 and recently_lost(t, b) else 1.0)
                  * (DEFICIT_CAPTURE if b.kind == "ENG" and getattr(t, "eng_focus", False) else 1.0)
-                 * (OPENING_NEUTRAL if b.owner is None and t.world.turn <= OPENING_TURNS else 1.0))
-        tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
+                 * (OPENING_NEUTRAL if b.owner is None and t.world.turn <= OPENING_TURNS else 1.0)
+                 * (SH_COST_BASE / (SH_COST_BASE + t.world.stage_cost(b) * stages) if SH_COST_BASE > 0 else 1.0))
+        tasks.append(Task("점령", "F", b.pos, 1, value, b, stages))
     return tasks
 
 
@@ -937,6 +953,7 @@ def assign_warriors(
     warriors: list[tuple[Pos, int]],
     tasks: list[Task],
     dist_to: Callable[[Pos], dict[Pos, int]],
+    sticky: frozenset[Pos] = frozenset(),
 ) -> tuple[list[tuple[Pos, Pos]], list[Pos], dict[Pos, int]]:
     """과제마다 가장 가까운 전투병 `need`명을 붙인다. 가치 / (1 + 가장 먼 전투병의 거리)가 큰 과제부터.
 
@@ -964,7 +981,10 @@ def assign_warriors(
                     break
             if got < task.need:
                 continue
-            score = task.value / (1 + chosen[-1][0])
+            far = chosen[-1][0]
+            if SH_INERTIA and task.pos in sticky:  # 지난 턴에 맡던 과제는 SH_INERTIA칸 더 가깝다고 친다
+                far = max(0, far - SH_INERTIA)
+            score = task.value / (1 + far)
             if best is None or score > best[0]:
                 best = (score, task, chosen)
         if best is None:

@@ -40,9 +40,10 @@ def test_flags_split_across_buildings():
     assert sorted((m.dst, m.count) for m in moves) == [((1, 6), 1), ((1, 8), 1)]
 
 
-def test_reserves_capture_cost_after_income():
+def test_reserves_capture_cost_after_income(monkeypatch):
     # 깃발병이 중립 광장 위에 있다: 비용 4는 이번 턴 수입(10)으로 충분하므로 자원 5를 모두 생산에 쓴다.
-    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명)
+    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명). 초반 광장 제외(SH_PLAZA_SKIP)는 이 검사와 무관하므로 끈다
+    monkeypatch.setattr(strategy, "SH_PLAZA_SKIP", 0)
     w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5)
     assert Spawn("F", 1) in strategy.decide(w)
 

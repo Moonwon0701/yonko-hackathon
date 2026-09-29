@@ -144,6 +144,11 @@ RUSH_UNTIL = 60
 RUSH_EXTRA = 2
 RUSH_VALUE = 6.0
 RUSH_CAPTURE = 3.0
+# 수비 먼저 러시: 우리 공학관 RUSH_SAFE_REACH걸음 안의 적 전투병이 같은 범위 우리 전투병 + RUSH_SAFE_MARGIN보다 많으면 그
+# 턴은 러시 과제를 내지 않는다(0 = 끔). 9/29 10:00 리더보드 치명ㄷ전은 러시가 상대 공학관에 7~9명을 보내는 동안 우리 공학관
+# 2칸 안이 5:11 → 3:18이 되어 공학관을 맞바꾸고 둘 다 잃었다. 80턴까지 상대 공학관만 빼앗은 서버 경기는 19승 1패
+RUSH_SAFE_REACH = 0
+RUSH_SAFE_MARGIN = 0
 # 초소: 상대 건물마다 전투병 1명(가치 PICKET_VALUE, 0 = 끔). 흉내 봇들이 서버 강팀처럼 전투병을 넓게·앞으로 깔 때 쓴 것.
 # 0 / 0.5 / 1 중 1.0 (러시만 켜면 검증 60.0 → 60.5%, 초소까지 켜면 63.0%)
 PICKET_VALUE = 1.0
@@ -570,7 +575,7 @@ def front_rank(world: World, b: Building, dist: dict[Pos, int], others: list[Bui
 def rush_tasks(t: Turn) -> list[Task]:
     """공학관 러시: RUSH_UNTIL턴까지 상대 캠퍼스 쪽 공학관(우리 것이 아닌 것)에 전투병 "위협 + RUSH_EXTRA"명."""
     world = t.world
-    if world.turn > RUSH_UNTIL:
+    if world.turn > RUSH_UNTIL or not own_eng_safe(t):
         return []
     home, away = world.map.bases[world.me], world.map.bases[world.enemy]
     tasks = []
@@ -579,6 +584,24 @@ def rush_tasks(t: Turn) -> list[Task]:
         if b.kind == "ENG" and dist.get(away, 99) < dist.get(home, 99):
             tasks.append(Task("러시", "W", b.pos, t.threat.get(b.pos, 0) + RUSH_EXTRA, RUSH_VALUE))
     return tasks
+
+
+def own_eng_safe(t: Turn) -> bool:
+    """러시를 내도 되는가: 우리 공학관마다 RUSH_SAFE_REACH걸음 안의 적 전투병 ≤ 우리 전투병 + RUSH_SAFE_MARGIN.
+    우리 공학관이 없으면(아직 못 먹었거나 잃었으면) 지킬 것이 없으므로 참. RUSH_SAFE_REACH가 0이면 늘 참."""
+    if RUSH_SAFE_REACH <= 0:
+        return True
+    world = t.world
+    ours = world.units_of(world.me, "W")
+    for b in world.owned(world.me):
+        if b.kind != "ENG":
+            continue
+        dist = t.dist_to(b.pos)
+        enemy = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= RUSH_SAFE_REACH)
+        mine = sum(n for p, n in ours if dist.get(p, 99) <= RUSH_SAFE_REACH)
+        if enemy > mine + RUSH_SAFE_MARGIN:
+            return False
+    return True
 
 
 def picket_tasks(t: Turn) -> list[Task]:

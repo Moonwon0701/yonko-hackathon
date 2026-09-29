@@ -196,6 +196,13 @@ RETAKE_CAPTURE = 2.0
 # 초소·전선·급습(학생회관)·러시를 빼고, 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명(가치 DEFICIT_VALUE),
 # 공학관 점령 가치 × DEFICIT_CAPTURE. 공학관 할인은 중복되지 않으므로(최소 2) 어느 쪽 공학관이든 하나면 된다.
 ENG_DEFICIT = 0
+# 공학관 조기 경보: ENG_WATCH_UNTIL턴까지 우리 공학관 ENG_WATCH_REACH걸음 안에 적 전투병이 오면 몰아내기 과제를 내고, 그 범위의
+# 적 전투병 + 1명을 세운다(0 = 끔). 리더보드에서 공학관을 잃은 강습(신촌도 우리땅·치명ㄷ·페이커)은 15~18턴에 3걸음 앞에서
+# 모았다가 한꺼번에 들어왔는데, 몰아내기는 ECON_EVICT_RADIUS(2)걸음 안에 와야 켜져 모이는 동안 반응하지 않았다.
+# 무작위 맵 1000개 × 2묶음에서 3 / 4 / 5걸음 중 5: 탈환만 켠 봇(fdb0112)과 직접 53.4·53.6%(862승 721패), 현진 봇 상대
+# +3.8·+1.0%p. 강습 흉내 봇 상대는 76.8 → 75.9%로 그대로 — 강습을 막는 것이 아니라 초반 공학관 수비가 두꺼워진 효과
+ENG_WATCH_REACH = 5
+ENG_WATCH_UNTIL = 30
 DEFICIT_VALUE = 6.0
 DEFICIT_EXTRA = 2
 DEFICIT_CAPTURE = 3.0
@@ -624,8 +631,10 @@ def defend_need(t: Turn, b: Building) -> int:
 
 def evict_tasks(t: Turn) -> list[Task]:
     """몰아내기: 적 전투병이 EVICT_RADIUS 안에 온 우리 핵심 건물(EVICT_KINDS) 위에 전투병을 세운다. 건물 위의 적
-    전투병은 이겨서 몰아내고, 옆의 적은 올라오지 못하게 한다. 지키기 과제가 이미 있는 건물은 뺀다."""
+    전투병은 이겨서 몰아내고, 옆의 적은 올라오지 못하게 한다. 지키기 과제가 이미 있는 건물은 뺀다.
+    ENG_WATCH_UNTIL턴까지 우리 공학관은 ENG_WATCH_REACH걸음 안의 적 전투병부터 보고, 그 수 + 1명을 세운다."""
     guarded = {b.id for b, _ in t.pressured}
+    watch = ENG_WATCH_REACH > 0 and t.world.turn <= ENG_WATCH_UNTIL
     tasks = []
     for b in t.world.owned(t.world.me):
         if b.kind not in EVICT_KINDS or b.id in guarded:
@@ -634,8 +643,12 @@ def evict_tasks(t: Turn) -> list[Task]:
         radius = ECON_EVICT_RADIUS if econ else EVICT_RADIUS
         weight = EVICT_WEIGHT * (ECON_WEIGHT if econ else 1.0)
         dist = t.dist_to(b.pos)
+        need = defend_need(t, b)
+        if watch and b.kind == "ENG":
+            radius = max(radius, ENG_WATCH_REACH)
+            need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ENG_WATCH_REACH) + 1)
         if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
-            tasks.append(Task("몰아내기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight))
+            tasks.append(Task("몰아내기", "W", b.pos, need, t.values[b.id] * weight))
     return tasks
 
 

@@ -265,8 +265,11 @@ ATTACK_TIE = 0
 # 병력 덩어리로 쓰기. 진 경기 20~80턴 우리 전투병의 32%가 먼 목표로 이동 중이었고, 한 턴 전투병 과제 칸이 16~20개로 쪼개져
 # 10~50턴 전투 뒤 상대만 남은 비율이 46~75%였다.
 # 과제 수 제한: 한 턴에 채우는 전투병 과제를 TASK_LIMIT개까지만 열고, 남는 전투병은 적 깃발병을 쫓는 대신 고른 과제 중
-# 가장 가까운 곳에 합류한다(0 = 끔)
+# 가장 가까운 곳에 합류한다(0 = 끔). 깃발병을 돕는 과제(FLAG_SUPPORT)는 세지도 막지도 않는다 — 처음 판(모든 과제를 셈)은
+# 호위·별동대가 잘려 깃발병이 움직이지 못해 제출본과 직접 0%였다
 TASK_LIMIT = 0
+FLAG_SUPPORT = {"호위", "별동대"}
+TASK_MERGE = 1  # 1 = 남는 전투병을 고른 과제에 합류, 0 = 예전처럼 공통 목표(적 깃발병·점령할 건물)로
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -1023,9 +1026,14 @@ def assign_warriors(
     plan: list[tuple[Pos, Pos]] = []
     arrival: dict[Pos, int] = {}
     remaining = list(tasks)
+    opened: list[str] = []  # 연 과제 종류 (TASK_LIMIT)
+    main_goals: list[Pos] = []  # 연 과제 중 깃발병 돕기가 아닌 것의 칸 (TASK_LIMIT 합류 목표)
     while remaining and cells:
         best: tuple[float, Task, list[tuple[int, int, int]]] | None = None
+        full = TASK_LIMIT and sum(1 for k in opened if k not in FLAG_SUPPORT) >= TASK_LIMIT
         for task in remaining:
+            if full and task.kind not in FLAG_SUPPORT:
+                continue
             dist = dist_to(task.pos)
             chosen: list[tuple[int, int, int]] = []  # (거리, 칸 순서, 데려갈 인원)
             got = 0
@@ -1051,13 +1059,14 @@ def assign_warriors(
             cells[i][1] -= take
         cells = [c for c in cells if c[1] > 0]
         arrival[task.pos] = chosen[-1][0]
+        opened.append(task.kind)
+        if task.kind not in FLAG_SUPPORT:
+            main_goals.append(task.pos)
         remaining.remove(task)
-        if TASK_LIMIT and len(arrival) >= TASK_LIMIT:
-            break
-    if TASK_LIMIT and arrival and cells:  # 남는 전투병은 고른 과제 중 가장 가까운 곳에 합류한다
+    if TASK_LIMIT and TASK_MERGE and main_goals and cells:  # 남는 전투병은 고른 (깃발병 돕기가 아닌) 과제 중 가장 가까운 곳에 합류한다
         rest = []
         for pos, n in cells:
-            near = min(arrival, key=lambda goal: (dist_to(goal).get(pos, 10**6), goal))
+            near = min(main_goals, key=lambda goal: (dist_to(goal).get(pos, 10**6), goal))
             if pos in dist_to(near):
                 plan += [(pos, near)] * n
             else:

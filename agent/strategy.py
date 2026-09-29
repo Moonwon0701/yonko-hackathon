@@ -181,12 +181,14 @@ TRADE_KINDS = {"처치", "급습", "러시", "초소", "별동대"}
 # 1명짜리 과제의 인원: 초소(상대 건물마다)·이동 중 호위. 전선은 FRONT_NEED
 PICKET_NEED = 1
 ESCORT_NEED = 1
-# ---- 공학관 되찾기 실험 스위치 (moonwon/unit-ops, 모두 기본 끔) ----
+# ---- 공학관 되찾기 스위치 (moonwon/unit-ops. 탈환은 켬, 열세 국면은 끔) ----
 # 리더보드 48판: 21~80턴에 우리만 공학관이 없던(전투병 값 3 : 2) 턴이 상대보다 많았던 경기는 진 15판 중 8판, 이긴 33판 중 0판.
 # 공학관을 잃은 뒤 되찾은 경기는 거의 없었다(9/29 신촌도 우리땅 35~40턴 잠깐).
 # 탈환: 최근 RETAKE_MEMORY턴 안에 우리 것이었던 공학관이 지금 우리 것이 아니면(중립화된 턴 = 상대가 점령하기 전 한 턴 포함)
-# 그 칸에 전투병 "위협 + RETAKE_EXTRA"명(가치 RETAKE_VALUE), 그 건물의 깃발병 점령 가치 × RETAKE_CAPTURE.
-RETAKE_VALUE = 0.0
+# 그 칸에 전투병 "위협 + RETAKE_EXTRA"명(가치 RETAKE_VALUE), 그 건물의 깃발병 점령 가치 × RETAKE_CAPTURE. 0 = 끔.
+# 무작위 맵 1000개(맵마다 1경기): 현진 봇 상대 44.8 → 51.0%(같은 맵 패→승 140 · 승→패 78), 끈 봇과 직접 56.9%,
+# 공학관 강습 흉내 봇 상대 75.1 → 76.8%. 풀 100경기에서는 현진 상대 56 → 52%로 반대로 보였다 (docs/benchmarks.md)
+RETAKE_VALUE = 8.0
 RETAKE_EXTRA = 1
 RETAKE_MEMORY = 20
 RETAKE_CAPTURE = 2.0

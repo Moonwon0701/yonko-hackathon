@@ -42,8 +42,9 @@ def test_flags_split_across_buildings():
 
 def test_reserves_capture_cost_after_income():
     # 깃발병이 중립 광장 위에 있다: 비용 4는 이번 턴 수입(10)으로 충분하므로 자원 5를 모두 생산에 쓴다.
-    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명)
-    w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5)
+    # (광장은 PLAZA_SKIP_UNTIL 전에는 목표가 아니므로 그 뒤 턴으로 잡는다)
+    w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5,
+              turn=strategy.PLAZA_SKIP_UNTIL)
     assert Spawn("F", 1) in strategy.decide(w)
 
 
@@ -55,12 +56,21 @@ def test_flags_come_before_warriors_when_below_minimum():
     assert spawns == [Spawn("F", 2)]  # 자원 12 = 깃발병 2명(10) + 남은 2 (전투병 값 3에 모자람)
 
 
-def test_more_flags_first_when_enemy_owns_more_buildings():
-    # 상대가 건물을 더 가지면 깃발병 최소 인원이 하나 늘어난다 (9/28 리더보드 패배 경기)
-    w = world([building(0, (3, 7), owner="K"), building(1, (5, 3), owner="K")],
-              units={("Y", "W", (1, 7)): 5, ("K", "W", (12, 7)): 20}, gold=17)
+def test_no_flags_made_after_the_stop_turn():
+    w = world([building(i, (3 + i, 3)) for i in range(10)],
+              units={("Y", "F", (0, 7)): 1}, gold=40, turn=strategy.FLAG_STOP_TURN)
     spawns = [a for a in strategy.decide(w) if isinstance(a, Spawn)]
-    assert spawns == [Spawn("F", 3)]
+    assert all(s.kind == "W" for s in spawns)
+
+
+def test_plaza_is_not_a_target_before_the_skip_turn():
+    # 광장은 기능이 없는데 단계 비용만 2배다. 초반에는 목표로 삼지 않는다
+    def flag_moves(turn):
+        w = world([building(0, (7, 7), kind="PLAZA")], units={("Y", "F", (7, 9)): 1}, gold=40, turn=turn)
+        return [a for a in strategy.decide(w) if isinstance(a, Move) and a.kind == "F"]
+
+    assert not flag_moves(0)
+    assert flag_moves(strategy.PLAZA_SKIP_UNTIL)
 
 
 def test_flags_stop_at_max_flags_even_with_many_targets(monkeypatch):
@@ -263,9 +273,11 @@ def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not()
 
 def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
     # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
+    # 인원은 DEFEND_REACH(2걸음) 안의 적 전투병 2명 + 1 = 3명. 예전에는 threat_map이 한 칸만 봐서
+    # 위협 0으로 읽고 1명만 보냈고, 그 사이 적이 한 칸 좁혀 다음 턴 건물을 가져갔다
     w = world([building(0, (5, 5), owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
-    assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
+    assert Move((5, 8), "W", 3, (5, 7)) in strategy.decide(w)
 
 
 def test_distance_map_links_stations_with_cost_one():

@@ -1,4 +1,4 @@
-"""World를 받아 다음 행동을 결정하는 에이전트 두뇌: decide(world) -> actions.
+﻿"""World를 받아 다음 행동을 결정하는 에이전트 두뇌: decide(world) -> actions.
 
 M1 — 건물 효용 점수 + 깃발병 목표 분산 (M0 기준선은 tests/lv2_port.py에 보관)
 - 건물 효용 = (추정 점수 + 기능 가치) / (도착 거리 + 점령 단계 수 + ETA_OFFSET)
@@ -74,7 +74,7 @@ SPARE_FLAGS = 1  # 목표 건물 수보다 이만큼 더 많은 깃발병까지�
 MIN_FLAGS = 2  # 깃발병이 이보다 적으면 전투병보다 먼저 만든다 (목표가 있을 때만)
 # 깃발병 총원 상한. 목표 건물 수만큼 깃발병을 만들면 20턴까지 깃발병에 35~75를 써서, 수입이 같은 상대보다
 # 전투병이 10~15명 적었다(9/27·9/28 리더보드 리플레이 18경기). 전투병은 1:1로 상쇄되므로 이 차이가 그대로 남는다
-MAX_FLAGS = 6
+MAX_FLAGS = 8
 BEHIND_EXTRA_FLAGS = 1  # 상대가 건물을 더 가지면 깃발병 최소 인원에 더한다
 
 # 점수를 모를 때의 기대값. 규칙: 신촌·안암 건물 1~2점, 중앙 건물 2~4점
@@ -84,15 +84,90 @@ SIDE_KINDS = {"HALL", "LIBRARY", "ENG", "HOSPITAL"}  # 역은 위치로 가린�
 CENTER_KINDS = {"WATCH", "DEPOT"}
 
 # 기능 가치 (점수 단위)
-HALL_VALUE_PER_TURN = 0.02  # 학생회관: 남은 턴 × 이 값 (초반일수록 크다)
-DEPOT_VALUE = 2.0  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
+# 학생회관: 매 턴 +2 자원. 남은 턴이 길수록 값지므로 감쇠시키되, 후반에도 수입은 계속 나오므로 0으로
+# 떨어뜨리지 않는다. 3.6에서 HALL_DECAY_STEP턴마다 0.2씩 내려 45턴에 하한 1.8 — 성혁 지시.
+# (예전 `0.02 × 남은 턴`은 160턴에 0이 됐다. 그 계수를 깎으면 졌다: 0.005 → 50%, 0.0125 → 42.5%)
+HALL_EARLY_VALUE = 3.6
+HALL_DECAY_STEP = 5
+HALL_DECAY = 0.2
+HALL_FLOOR = 1.8
+DEPOT_VALUE = 3.5  # 보급소: 최초 점령 +15 자원(= 초반 전투병 5명), 팀별 건물당 1회 — 성혁 지시로 상향
 # 공학관: 전투병 값 3 → 2, 같은 자원으로 전투병 1.5배. 진 경기는 전투병(= 생산량) 차이로 벌어지므로
 # 0.5 → 2.0으로 올렸다(main 상대 400경기 약 61% — docs/benchmarks.md)
-FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
+# 공학관·학생회관·역은 아래에서 따로 매긴다. 병원은 후순위: 분리도 0.08에 상대가 뺏으러 오지도 않는다
+# (진 경기 중립화 0.0회) — 성혁 지시
+FUNCTION_VALUE = {"LIBRARY": 1.0, "HOSPITAL": 0.5, "WATCH": 0.3}
+# 병원: 보통은 후순위(0.5)지만, 본진에서도 어느 역에서도 HOSPITAL_ALONE_DIST 밖에 홀로 떨어진 병원은
+# 그 구역에 병력을 내려놓는 유일한 수단이라 따로 값을 준다 — 성혁 지시
+HOSPITAL_ISOLATED = 2.5
+HOSPITAL_ALONE_DIST = 4
+
+# ablation 스위치: False면 역·보급소·학생회관·도서관·고립병원을 main 값으로 되돌린다(공학관 감쇠는 유지).
+# 현진 브랜치 상대가 36% → 24%로 떨어진 원인이 이 다섯인지, 깃발병 80턴 중단인지 가르기 위한 것.
+NEW_BUILDING_VALUES = True
+MAIN_FUNCTION_VALUE = {"LIBRARY": 0.5, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
+MAIN_HALL_PER_TURN = 0.02
+MAIN_DEPOT_VALUE = 2.0
+
+# 역: 순간이동은 내 역이 2개 이상이라야 열린다(턴당 1회, 최대 5명). 가치는 "기본값 + 알파"가 아니라
+# 조건에서 나온다: ① STATION_NEAR 안에 다른 역이 있어야 거점이 되고(없으면 0) ② 우리 역이 하나 있어야
+# 짝이 완성되며 ③ 가장 연계되는 역(가까운 역 중 주변 건물 가치가 가장 큰 것) 주변에 무엇이 있느냐로
+# 값이 정해진다. 병원은 역 주변 가치에서 제외한다 — 역이 있으면 굳이 병원을 쓸 이유가 없다 (성혁 지시).
+STATION_FIRST = 0.0  # 첫 역 — 아직 순간이동이 안 열린다
+STATION_BASE = 2.0  # 짝을 완성하는 역의 기본값. 여기에 연계 역 주변 가치가 더해져 최대 3.9쯤 된다
+STATION_EXTRA = 0.3  # 세 번째부터 — 경로 선택지만 는다
+# 짝이 될 역은 최소 이만큼 떨어져 있어야 한다. 가까운 역끼리는 걸어서도 닿아 순간이동이 한 턴을 쓸
+# 값어치가 없다(도착한 유닛은 그 턴에 더 못 움직인다) — 성혁 지시
+STATION_MIN_LINK = 4
+STATION_NEIGHBOR = 3
+STATION_NEIGHBOR_VALUE = {"ENG": 1.0, "DEPOT": 0.6, "HALL": 0.3}
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
 DANGER_DISCOUNT = 0.5  # 적 전투병이 닿는 건물은 깃발병 목표로서 가치를 이만큼 곱한다
+
+# ------------------------------------------------------------------ 성혁 테마(공격·확장) 2026-09-29
+# 진 경기의 원인은 초반 30턴 전투병 부족 하나다(현진 브랜치 상대 98패: 10턴에 점수 +2.1로 앞서면서
+# 전투병 −0.7, 30턴 −8.1, 120턴 −79.0). 건물은 충분히 먹는데 병력이 없어서 진다. 아래 다섯은 그 하나를
+# 겨냥한다 — 초반 자원을 점령이 아니라 전투병으로 돌리고, 얻은 건물은 싸게 지킨다.
+
+# 1. 점령 비용을 효용에 반영한다. 지금까지 효용식에 자원 비용이 없어서 단계 비용이 2배인 광장을 초반에
+#    우리만 먹고 있었다(우리 0.38 : 현진 0.12, 승패와 무관하게). 도서관 할인도 자동으로 반영된다.
+PLAZA_SKIP_UNTIL = 40  # 이 턴 전에는 광장을 깃발병 목표로 삼지 않는다
+COST_BASE = 8.0  # 가치 × COST_BASE / (COST_BASE + 자원 비용). 비용 2 → ×0.80, 4 → ×0.67, 8 → ×0.50
+
+# 2. 공학관은 복리 경제 건물이라 일찍 먹을수록 가치가 크다. 3.0에서 ENG_DECAY_STEP턴마다 ENG_DECAY씩
+#    내려 25턴에 2.0(main 검증값)에 닿고 그 아래로는 안 내린다. 경제 건물 가치를 내리면 진다는 것을
+#    9/29에 두 번 확인했으므로(학생회관 0.005 → 50%, 0.0125 → 42.5%) 하한을 main 값으로 둔다.
+ENG_EARLY_VALUE = 3.0
+ENG_DECAY_STEP = 5
+ENG_DECAY = 0.2
+ENG_FLOOR = 2.0
+
+# 3. 깃발병은 예외적으로만 만든다: 총원이 FLAG_REFILL_AT 이하로 떨어진 턴에만 FLAG_REFILL_COUNT명,
+#    총원 MAX_FLAGS까지. FLAG_STOP_TURN부터는 아예 안 만든다. 나머지 자원은 전부 전투병으로 간다.
+# 깃발병 생산은 main 규칙(목표 건물 수만큼)을 그대로 쓰고, 총원 상한(MAX_FLAGS)과 생산 시기만 제한한다.
+# "총원 4명 이하인 턴에만 2명"이라는 대체 규칙도 재 봤지만 같은 시드에서 66% → 56%로 나빠졌다:
+# 깃발병이 묶여 건물을 못 늘린 손해가 전투병을 아낀 이득보다 컸다 (docs/benchmarks.md 9/29).
+FLAG_STOP_TURN = 999
+
+# 4. 호위 인원을 턴에 따라 바꾼다. 초반에는 깃발병이 우리 지역 안에 있고 자원도 없어 붙이지 않는다.
+#    중반은 지키고 처리하는 것이 중요해 크게 늘린다. (턴 < 첫 값 → 호위 인원)
+ESCORT_TIERS = ((20, 0), (40, 1), (80, 4))
+ESCORT_LATE = 1  # FLAG_STOP_TURN 이후
+ESCORT_VALUE = 1.0  # 이동 중 깃발병 호위 과제의 가치
+ESCORT_LEAD = False  # True=선행(깃발병이 갈 칸) / False=동행(깃발병이 지금 있는 칸)
+# 적응형: 인원을 턴이 아니라 그 칸의 적 위협으로 정한다. 상·하한을 두는 이유는 assign_warriors가
+# "필요 인원을 채울 수 있는 과제"만 배정하기 때문이다 — need를 크게 잡으면 호위가 통째로 사라진다.
+ESCORT_ADAPTIVE = False
+ESCORT_MIN = 1
+ESCORT_MAX = 6
+
+# 5. 점령을 마친 깃발병은 건물 위에 남지 않는다 — 소유는 떠나도 유지되고, 남으면 "깃발 뽑기"의 표적이다.
+#    요충지는 1칸, 나머지는 2칸 떨어져 대기한다. 우리 건물에서만 비킨다: 중립·상대 건물 위의 깃발병은
+#    경합을 만들어 상대 점령을 막고 있다(그 효과를 뺐더니 31.5%였다 — docs/benchmarks.md 9/27).
+IDLE_KEEP = {"ENG": 1, "HALL": 1}
+IDLE_KEEP_DEFAULT = 2
 
 
 # 국면별 과제 구성(종류·가중치)은 파일 끝 PHASE_TREE에 가지마다 적는다.
@@ -105,6 +180,9 @@ ATTACK_MARGIN = 2  # 공격: 우리 전투병이 적보다 이만큼 많으면
 # 먼저 건물 위·옆에 모아 두고 깃발병을 나중에 들이는 경우를 못 막았다(9/28 리더보드 패배 4경기 중 3경기)
 EVICT_KINDS = {"HALL", "ENG", "HOSPITAL"}
 EVICT_RADIUS = 2
+# 방어 인원을 정할 때 세는 적 전투병의 거리. threat_map은 한 칸만 보므로 두 칸 밖에 모인 적을 0으로
+# 읽는다. 탐지(EVICT_RADIUS)는 이미 2칸인데 인원만 1칸 기준이던 것을 맞춘다 — 성혁 지시
+DEFEND_REACH = 1
 EVICT_WEIGHT = 1.0
 # 전선: 적이 오기 전에, 점령을 끝낸 우리 건물 중 가장 노출된 곳에 전투병을 미리 세운다.
 # 노출 순위 = 가장 가까운 적·중립 건물까지 거리 + FRONT_MARGIN_WEIGHT × (적 본진 거리 − 우리 본진 거리). 작을수록 전선
@@ -250,23 +328,22 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    # 성혁 테마: 깃발병은 예외적으로만 만든다 — 총원이 FLAG_REFILL_AT 이하로 떨어진 턴에만 채우고,
+    # FLAG_STOP_TURN부터는 아예 만들지 않는다. 남는 자원은 전부 전투병으로 간다.
+    # 목표 건물 수만큼(+SPARE_FLAGS) MAX_FLAGS까지 만드는 main 규칙 그대로 두되, FLAG_STOP_TURN부터는
+    # 만들지 않는다: 그때 만든 깃발병이 목표에 닿아 2단계 점령을 마치려면 20~30턴이 필요한데, 같은 자원을
+    # 전투병으로 돌리면 그 턴에 바로 쓰인다.
+    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
     # 건물이 밀리면 최소 인원을 늘린다: 적 전투병이 훨씬 많으면 전투병 목표를 끝내 못 채워, 깃발병이 최소 인원에
     # 묶인 채 건물을 되찾지 못했다(9/28 리더보드 패배 28·29: 20턴 이후 깃발병 2명 이하 81·75턴)
-    behind = len(world.owned(world.enemy)) > len(world.owned(me))
-    min_f = MIN_FLAGS + (BEHIND_EXTRA_FLAGS if behind else 0)
-    make_f = min(want_f, max(0, min_f - nf), budget // fc)
+    make_f = min(want_f, budget // fc)  # 깃발병이 먼저다. 만드는 턴 자체가 드물다
     budget -= make_f * fc
     make_w = min(max(0, want_w - nw), budget // wc)
     budget -= make_w * wc
-    more_f = min(budget // fc, want_f - make_f)
-    make_f += more_f
-    budget -= more_f * fc
-    if make_f == want_f:  # 깃발병이 충분하면 남는 자원은 쌓아 두지 않고 전투병으로
-        make_w += budget // wc
+    make_w += budget // wc  # 남는 자원은 쌓아 두지 않고 전부 전투병으로
     t.make_w, t.make_f = make_w, make_f
     # M4: 생산 위치 — 본진 또는 우리 병원 중 목표에 가장 가까운 안전한 곳 (동점이면 본진)
     passable = world.map.passable
@@ -357,7 +434,37 @@ def move_flags(t: Turn) -> None:
         step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold)
         if step:
             f_steps[(pos, step)] += 1
+    # 성혁 테마: 과제를 못 받은 깃발병이 우리 건물 위·근처에 있으면 IDLE_KEEP만큼 떨어져 대기한다.
+    # 건물 위에 남으면 "깃발 뽑기"의 표적이 되는데, 소유는 떠나도 유지되므로 남을 이유가 없다.
+    planned = {pos for pos, _ in t.plan}
+    for pos, _ in t.flags:
+        if pos not in planned:
+            step = idle_step(t, pos, safe)
+            if step:
+                f_steps[(pos, step)] += 1
     t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
+
+
+def idle_step(t: Turn, pos: Pos, safe: Callable[[Pos], bool]) -> Pos | None:
+    """과제 없는 깃발병의 다음 칸. 우리 건물에서 IDLE_KEEP(요충지 1, 나머지 2)칸까지 물러난다.
+
+    중립·상대 건물 위에서는 움직이지 않는다 — 거기 있는 깃발병은 경합을 만들어 상대 점령을 막는다.
+    """
+    me = t.world.me
+    near = [b for b in t.world.owned(me) if manhattan(b.pos, pos) <= IDLE_KEEP_DEFAULT]
+    want = [b for b in near if manhattan(b.pos, pos) < IDLE_KEEP.get(b.kind, IDLE_KEEP_DEFAULT)]
+    if not want:
+        return None
+    x, y = pos
+    best = None
+    for dx, dy in t.order:
+        nxt = (x + dx, y + dy)
+        if not t.world.map.passable(nxt) or not safe(nxt):
+            continue
+        gain = min(manhattan(b.pos, nxt) - manhattan(b.pos, pos) for b in want)
+        if gain > 0 and (best is None or nxt < best):
+            best = nxt
+    return best
 
 
 def set_priority(t: Turn) -> None:
@@ -438,13 +545,18 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     tasks = []
     arrival = getattr(t, "arrival", {})  # 전투병이 가는 칸 (깃발병 2차에서만 있다)
     for b in t.targets:
+        if b.kind == "PLAZA" and t.world.turn < PLAZA_SKIP_UNTIL:
+            continue  # 기능이 없는데 단계 비용만 2배다. 초반 자원은 전투병으로 돌린다
         pulled = b.id in t.pulled
         covered = pulled or b.pos in arrival
+        stages = 1 if pulled or b.owner is None else 2
+        cost = t.world.stage_cost(b) * stages  # 실제로 드는 자원 (도서관 할인 포함)
         value = (t.values[b.id]
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
-                 * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0))
-        tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
+                 * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
+                 * COST_BASE / (COST_BASE + cost))
+        tasks.append(Task("점령", "F", b.pos, 1, value, b, stages))
     return tasks
 
 
@@ -459,20 +571,62 @@ def kill_tasks(t: Turn) -> list[Task]:
     return tasks
 
 
+def escort_size(turn: int) -> int:
+    """이 턴의 호위 인원 (ESCORT_TIERS, 그 뒤는 ESCORT_LATE)."""
+    for until, size in ESCORT_TIERS:
+        if turn < until:
+            return size
+    return ESCORT_LATE
+
+
 def escort_tasks(t: Turn) -> list[Task]:
-    """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다."""
+    """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다.
+
+    성혁 테마(선행): 목표로 가는 깃발병마다, 그 깃발병이 이번 턴 들어갈 칸에 그 턴의 호위 인원
+    (escort_size)을 **먼저** 보낸다. 깃발병 안전 판정은 "그 칸의 적 위협 ≤ 우리 전투병"이라, 전투병이
+    그 칸을 차지해야 깃발병이 따라 들어간다. 정찰이 목적이 아니다 — 유닛은 전부 보이고(game-api.md 10절),
+    모르는 것은 동시 턴이라 상대가 이번 턴에 무엇을 할지다. 0명인 구간(초반)에는 예전 호위만 남는다.
+    """
     tasks = []
+    covered = set()
     for c in t.capturing_now:
         b = c.building
         if t.threat.get(b.pos, 0) and b.pos not in t.enemy_flags:
             tasks.append(Task("호위", "W", b.pos, t.threat[b.pos], t.values[b.id]))
+            covered.add(b.pos)
+    size = escort_size(t.world.turn)
+    if size:
+        # 깃발병 1차와 같은 입력으로 배정을 다시 구한다 (plan_flags는 결과를 남기지 않는다)
+        for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to):
+            cell = pos
+            if ESCORT_LEAD:  # 선행: 깃발병이 이번 턴 들어갈 칸을 먼저 차지한다
+                cell = step_along(pos, t.dist_to(task.pos), t.order) or task.pos
+            if cell in covered:
+                continue
+            need = size
+            if ESCORT_ADAPTIVE:
+                need = min(ESCORT_MAX, max(ESCORT_MIN, t.threat.get(cell, 0) + 1))
+            tasks.append(Task("호위", "W", cell, need, ESCORT_VALUE))
+            covered.add(cell)
     return tasks
+
+
+def defend_need(t: Turn, b: Building) -> int:
+    """우리 건물 `b`를 지키는 데 필요한 전투병 수.
+
+    `threat_map`은 제자리 + 상하좌우 한 칸만 세므로, 적이 두 칸 밖에 모여 있으면 위협 0으로 읽고 한 명만
+    보낸다. 그 사이 적은 한 칸 좁히고 다음 턴 들어온다. 탐지는 이미 EVICT_RADIUS(2칸)로 하고 있었는데
+    대응 인원만 한 칸 기준이었다 — DEFEND_REACH걸음 안의 적 전투병까지 세어 맞춘다.
+    """
+    dist = t.dist_to(b.pos)
+    near = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= DEFEND_REACH)
+    return max(t.threat.get(b.pos, 0), near) + 1
 
 
 def guard_tasks(t: Turn, weight: float) -> list[Task]:
     """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다(가치 × weight). 올라오는 적 깃발병을
     그 칸에서 잡는다."""
-    return [Task("지키기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight) for b, _ in t.pressured]
+    return [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
 
 
 def evict_tasks(t: Turn) -> list[Task]:
@@ -485,7 +639,7 @@ def evict_tasks(t: Turn) -> list[Task]:
             continue
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
-            tasks.append(Task("몰아내기", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * EVICT_WEIGHT))
+            tasks.append(Task("몰아내기", "W", b.pos, defend_need(t, b), t.values[b.id] * EVICT_WEIGHT))
     return tasks
 
 
@@ -710,13 +864,61 @@ def estimated_score(world: World, b: Building) -> float:
 def building_value(world: World, b: Building) -> float:
     """건물 하나의 가치(점수 단위) = 추정 점수 + 기능 가치."""
     score = estimated_score(world, b)
-    if b.kind == "HALL":
-        bonus = HALL_VALUE_PER_TURN * max(0, TOTAL_TURNS - world.turn)
+    if b.kind == "ENG":  # 전투병 값 −1 — 앞으로 만들 전투병이 많을수록 값지다. 25턴에 하한 ENG_FLOOR
+        return score + max(ENG_FLOOR, ENG_EARLY_VALUE - ENG_DECAY * (world.turn // ENG_DECAY_STEP))
+    if not NEW_BUILDING_VALUES:  # ablation: 나머지는 main 값
+        if b.kind == "HALL":
+            return score + MAIN_HALL_PER_TURN * max(0, TOTAL_TURNS - world.turn)
+        if b.kind == "DEPOT":
+            return score + (0.0 if b.id in _depots_taken else MAIN_DEPOT_VALUE)
+        return score + MAIN_FUNCTION_VALUE.get(b.kind, 0.0)
+    if b.kind == "HALL":  # 수입 +2 — 남은 턴이 길수록 값지되, 후반에도 0은 아니다
+        bonus = max(HALL_FLOOR, HALL_EARLY_VALUE - HALL_DECAY * (world.turn // HALL_DECAY_STEP))
     elif b.kind == "DEPOT":
         bonus = 0.0 if b.id in _depots_taken else DEPOT_VALUE
+    elif b.kind == "ENG":  # 전투병 값 −1 — 앞으로 만들 전투병이 많을수록 값지다. 25턴에 하한 ENG_FLOOR
+        bonus = max(ENG_FLOOR, ENG_EARLY_VALUE - ENG_DECAY * (world.turn // ENG_DECAY_STEP))
+    elif b.kind == "STATION":
+        bonus = station_value(world, b)
+    elif b.kind == "HOSPITAL" and isolated_hospital(world, b):
+        bonus = HOSPITAL_ISOLATED  # 본진·역에서 먼 병원은 그 구역에 병력을 내려놓는 유일한 수단
     else:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
     return score + bonus
+
+
+def station_value(world: World, b: Building) -> float:
+    """역의 기능 가치. 순간이동은 내 역이 2개 이상이라야 열리므로 이 역이 우리에게 몇 번째인지로 갈린다.
+
+    STATION_NEAR 안에 다른 역이 없으면 거점이 못 되므로 0. 있으면 이 역 주변 STATION_NEIGHBOR 안의
+    건물만큼 보너스를 더한다 — 순간이동으로 곧장 닿는 자리이기 때문이다. 우리가 이미 가진 역에도 같은
+    값이 나온다: 잃으면 짝이 깨지므로 지킬 가치도 그만큼이다.
+    """
+    others = [s for s in world.buildings.values() if s.kind == "STATION" and s.id != b.id]
+    linked = [s for s in others if manhattan(b.pos, s.pos) >= STATION_MIN_LINK]
+    if not linked:  # 붙어 있는 역끼리는 순간이동이 한 턴을 쓸 값어치가 없다
+        return 0.0
+    mine = [s for s in linked if s.owner == world.me]
+    if not mine:
+        return STATION_FIRST
+    if len(mine) > 1:
+        return STATION_EXTRA
+    # 가장 연계되는 역 = 쓸 만큼 떨어진 역 중 주변 건물 가치가 가장 큰 것. 그 주변에 무엇이 있느냐가 값이다
+    return STATION_BASE + max(station_neighbors(world, s) for s in linked)
+
+
+def station_neighbors(world: World, s: Building) -> float:
+    """역 `s` 주변 STATION_NEIGHBOR 안의 건물 가치 합 (병원 제외)."""
+    return sum(STATION_NEIGHBOR_VALUE.get(o.kind, 0.0) for o in world.buildings.values()
+               if o.id != s.id and manhattan(o.pos, s.pos) <= STATION_NEIGHBOR)
+
+
+def isolated_hospital(world: World, b: Building) -> bool:
+    """본진에서도, 어느 역에서도 HOSPITAL_ALONE_DIST 밖에 홀로 떨어진 병원인가."""
+    if manhattan(b.pos, world.map.bases[world.me]) <= HOSPITAL_ALONE_DIST:
+        return False
+    return all(manhattan(b.pos, s.pos) > HOSPITAL_ALONE_DIST
+               for s in world.buildings.values() if s.kind == "STATION")
 
 
 def is_center(world: World, b: Building) -> bool:

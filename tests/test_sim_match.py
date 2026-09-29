@@ -115,7 +115,9 @@ def test_team_view_matches_what_bots_received():
                      and tok[6] != "-1"}
             assert shown == set(frame["revealed"][team])
             checked += 1
-    assert checked > 40
+    # 표본이 충분한지만 본다. 봇이 세지면 lv1 상대 즉시 승리가 빨라져 프레임 수가 줄므로 경계를 낮춘다
+    # (성혁 테마 브랜치에서 20턴 승리가 나와 40이 되면서 `> 40`이 깨졌다)
+    assert checked > 30
 
 
 def write_bot(tmp_path: Path, name: str, body: str) -> bots.BotSpec:

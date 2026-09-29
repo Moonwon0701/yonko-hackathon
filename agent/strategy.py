@@ -180,6 +180,11 @@ ATTACK_MARGIN = 2  # 공격: 우리 전투병이 적보다 이만큼 많으면
 # 먼저 건물 위·옆에 모아 두고 깃발병을 나중에 들이는 경우를 못 막았다(9/28 리더보드 패배 4경기 중 3경기)
 EVICT_KINDS = {"HALL", "ENG", "HOSPITAL"}
 EVICT_RADIUS = 2
+# 경제 건물(공학관·학생회관)은 몰아내기 가치를 이만큼 더 곱한다. 인원(need)은 1명 그대로 두고
+# 순서만 앞세우는 것이 핵심이다: 인원을 늘리면 적 깃발병을 쫓을 전투병이 줄어 크게 졌다
+# (방어 2걸음 실험, main 65% → 52% / 현진 33% → 19% — docs/benchmarks.md 9/29). 1.0이면 끈다
+ECON_KINDS = {"ENG", "HALL"}
+ECON_EVICT_WEIGHT = 1.0
 # 방어 인원을 정할 때 세는 적 전투병의 거리. threat_map은 한 칸만 보므로 두 칸 밖에 모인 적을 0으로
 # 읽는다. 탐지(EVICT_RADIUS)는 이미 2칸인데 인원만 1칸 기준이던 것을 맞춘다 — 성혁 지시
 DEFEND_REACH = 1
@@ -199,6 +204,11 @@ RAID_STEAL = 2.0  # 상대 경제 건물의 점령 가치에 더 곱하는 값
 RAID_SURPLUS = -99  # 우리 전투병이 적 전투병 + 이 값 이상일 때만 급습한다
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
+
+# 지난 턴에 전투병을 받은 과제 칸. 유닛에 ID가 없어 병사 단위 편성은 못 만들지만, 과제 단위 관성으로
+# 전투병이 턴마다 목표를 갈아타며 오가는 것을 줄인다. 0이면 끈다 — 성혁 지시
+WARRIOR_INERTIA = 1
+_served: set[Pos] = set()
 
 _depots_taken: set[int] = set()  # 우리가 소유했던 보급소 id (보너스는 1회뿐). 한 프로세스 = 한 경기
 _dist_cache: dict[Pos, dict[Pos, int]] = {}  # 칸 → 그 칸까지의 거리표. 맵은 경기 내내 같으므로 턴을 넘어 재사용
@@ -359,9 +369,14 @@ def produce(t: Turn) -> None:
 
 
 def plan_warriors(t: Turn) -> None:
-    """전투병 배정: 과제마다 가장 가까운 전투병을 붙인다(이번 턴 새로 만든 전투병 포함)."""
+    """전투병 배정: 과제마다 가장 가까운 전투병을 붙인다(이번 턴 새로 만든 전투병 포함).
+
+    지난 턴에 병력을 받았던 과제 칸은 `_served`에 남겨 두고 관성을 준다(assign_warriors의 `sticky`).
+    """
+    global _served
     warriors = with_spawned(t.world.units_of(t.world.me, "W"), t.w_site, t.make_w, t.key)
-    t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to)
+    t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to, frozenset(_served))
+    _served = {dst for _, dst in t.w_plan}
 
 
 def move_warriors(t: Turn) -> None:
@@ -478,6 +493,7 @@ def remember(world: World) -> None:
     """턴을 넘어 기억해야 하는 것: 보급소 보너스를 이미 받았는지, 직전 국면, 거리표 캐시."""
     if world.turn <= 1:
         _depots_taken.clear()
+        _served.clear()
         _phase.update(name="EXPAND", calm=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
     if _dist_cache_rows != [world.map.rows]:
@@ -639,7 +655,8 @@ def evict_tasks(t: Turn) -> list[Task]:
             continue
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= EVICT_RADIUS for p, _ in t.enemy_warriors):
-            tasks.append(Task("몰아내기", "W", b.pos, defend_need(t, b), t.values[b.id] * EVICT_WEIGHT))
+            weight = EVICT_WEIGHT * (ECON_EVICT_WEIGHT if b.kind in ECON_KINDS else 1.0)
+            tasks.append(Task("몰아내기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight))
     return tasks
 
 
@@ -777,8 +794,14 @@ def assign_warriors(
     warriors: list[tuple[Pos, int]],
     tasks: list[Task],
     dist_to: Callable[[Pos], dict[Pos, int]],
+    sticky: frozenset[Pos] = frozenset(),
 ) -> tuple[list[tuple[Pos, Pos]], list[Pos], dict[Pos, int]]:
     """과제마다 가장 가까운 전투병 `need`명을 붙인다. 가치 / (1 + 가장 먼 전투병의 거리)가 큰 과제부터.
+
+    `sticky`(지난 턴에 전투병을 받은 과제 칸)는 거리를 WARRIOR_INERTIA만큼 깎아 계속 맡게 한다. 유닛에
+    ID가 없어(칸·병종·인원으로만 다룬다) 병사 단위 편성은 만들 수 없지만, 과제 단위로 관성을 주면 전투병이
+    턴마다 목표를 갈아타며 오가는 것을 줄일 수 있다. 역치는 "한 칸 더 가까운 과제보다 나아야 옮긴다"이고,
+    과제가 사라지면(점령 완료·적 깃발병 사망) 다음 턴 목록에서 빠지므로 저절로 풀린다.
 
     돌려주는 값: (전투병 칸, 목표 칸) 목록, 과제를 못 받은 전투병 칸 목록, 과제 칸 → 전원 도착까지 턴 수.
 
@@ -804,7 +827,10 @@ def assign_warriors(
                     break
             if got < task.need:
                 continue
-            score = task.value / (1 + chosen[-1][0])
+            far = chosen[-1][0]
+            if task.pos in sticky:  # 지난 턴에 맡던 과제는 한 칸 더 가깝다고 친다
+                far = max(0, far - WARRIOR_INERTIA)
+            score = task.value / (1 + far)
             if best is None or score > best[0]:
                 best = (score, task, chosen)
         if best is None:

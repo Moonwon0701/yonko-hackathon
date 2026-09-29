@@ -273,11 +273,12 @@ def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not()
 
 def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
     # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기)
-    # 인원은 DEFEND_REACH(2걸음) 안의 적 전투병 2명 + 1 = 3명. 예전에는 threat_map이 한 칸만 봐서
-    # 위협 0으로 읽고 1명만 보냈고, 그 사이 적이 한 칸 좁혀 다음 턴 건물을 가져갔다
+    # 인원은 defend_need = max(1칸 위협, DEFEND_REACH걸음 안의 적) + 1. 기본 DEFEND_REACH=1이라 1명이다.
+    # 2로 올려 2걸음 안의 적 2명을 세면 3명이 되는데, 그러면 적 깃발병을 쫓을 전투병이 줄어 크게 졌다
+    # (main 65% → 52%, 현진 33% → 19% — docs/benchmarks.md 9/29)
     w = world([building(0, (5, 5), owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
-    assert Move((5, 8), "W", 3, (5, 7)) in strategy.decide(w)
+    assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
 
 
 def test_distance_map_links_stations_with_cost_one():

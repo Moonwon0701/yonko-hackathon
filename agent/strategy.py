@@ -168,6 +168,10 @@ SECOND_SQUAD_TURN = 30  # 이 턴부터 별동대 2개 (목표 건물이 서로 
 # 모아서 들어가기: 1 = 적 전투병이 선 과제 칸 바로 앞에서, 그 과제의 가장 먼 전투병이 한 걸음 거리가 될 때까지 기다린다.
 # 2 = 1 + 가는 길에 적 전투병이 지금 선 칸이면, 이번 턴 그 칸에 들어갈 우리 인원이 적보다 많을 때만 들어간다.
 STAGE = 0
+# 모으는 거리: 1 = 예전(적 바로 옆 칸). 9/29 흉내 봇 풀에서 STAGE 1·2가 76.6 → 40.3·39.4%로 무너졌고, 같은 맵 대결에서
+# 제자리에 선 전투병이 44~52 → 54~64%로 늘며 건물을 잃었다(적 옆 칸에서 기다리는 동안 상대가 먼저 움직임). 2 = 적 전투병이 한
+# 걸음에 닿지 않는 거리에서 모았다가 함께 들어간다
+STAGE_GAP = 1
 # 요격: 적 깃발병을 뒤쫓지 않고 그 깃발병이 갈 건물(가장 가까운 우리·중립 건물, INTERCEPT_RADIUS걸음 안)에 먼저 간다.
 # INTERCEPT_IDLE = 과제 없는 전투병의 공통 목표를 적 깃발병 칸 대신 그 건물로. INTERCEPT_VALUE > 0 = 그 건물이 우리 것이면
 # "요격" 과제(그 칸 위협 + 1명, 가치 = 건물 가치 × INTERCEPT_VALUE)를 더한다.
@@ -457,8 +461,9 @@ def move_warriors(t: Turn) -> None:
     queued = 0  # 이번 턴 순간이동 경로에 태운 인원 = 대기열. 역에 이미 선 인원부터 센다
     enemy_w = dict(t.enemy_warriors)
     for *_, pos, n, walk, tele, goal in sorted(groups):
-        if STAGE and goal is not None and enemy_w.get(goal) and walk.get(pos) == 1 and t.arrival.get(goal, 0) > 1:
-            w_after[pos] += n  # 과제의 나머지 전투병이 한 걸음 거리에 올 때까지 앞 칸에서 기다린다
+        if (STAGE and goal is not None and enemy_w.get(goal) and walk.get(pos) == STAGE_GAP
+                and t.arrival.get(goal, 0) > STAGE_GAP):
+            w_after[pos] += n  # 과제의 나머지 전투병이 STAGE_GAP걸음 안에 올 때까지 그 거리에서 기다린다
             continue
         # 순간이동은 턴당 TELE_MAX_UNITS명뿐이다. 대기열에서 기다릴 턴까지 더해도 걷기보다 빠른 인원만
         # 역으로 보낸다. (전원을 역으로 보내면 못 탄 인원이 걸어서 물러났다가 다음 턴 돌아오기를 반복했다 —

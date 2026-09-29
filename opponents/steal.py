@@ -10,10 +10,10 @@
 from mimic import each_turn, escort_flags, run, s, scale_capture
 
 STEAL_FROM = 10
-STEAL_REACH = 3  # 이 걸음 안에 상대 전투병이 없으면 빈 건물
-STEAL_ECON = 4.0  # 빈 학생회관·공학관 점령 가치 배수
+STEAL_REACH = 2  # 이 걸음 안에 상대 전투병이 없으면 빈 건물
+STEAL_ECON = 6.0  # 빈 학생회관·공학관 점령 가치 배수
 STEAL_OTHER = 2.0  # 빈 다른 건물
-FLAGS = 4  # 깃발병 최소 인원 (STEAL_FROM턴부터)
+FLAGS = 5  # 깃발병 최소 인원 (STEAL_FROM턴부터)
 DEFAULTS = {"MIN_FLAGS": s.MIN_FLAGS}
 
 

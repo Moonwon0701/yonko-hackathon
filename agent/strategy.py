@@ -84,28 +84,11 @@ SIDE_KINDS = {"HALL", "LIBRARY", "ENG", "HOSPITAL"}  # 역은 위치로 가린�
 CENTER_KINDS = {"WATCH", "DEPOT"}
 
 # 기능 가치 (점수 단위)
-# 학생회관: 남은 턴 × 이 값 (초반일수록 크다). 0.02(초반 3.2)는 병원·공학관보다 위였는데, 순위를
-# 역 > 공학관 > 병원 > 학생회관으로 잡기로 해 초반 0.8이 되게 낮췄다 — 성혁 지시
-HALL_VALUE_PER_TURN = 0.02
+HALL_VALUE_PER_TURN = 0.02  # 학생회관: 남은 턴 × 이 값 (초반일수록 크다)
 DEPOT_VALUE = 2.0  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
 # 공학관: 전투병 값 3 → 2, 같은 자원으로 전투병 1.5배. 진 경기는 전투병(= 생산량) 차이로 벌어지므로
 # 0.5 → 2.0으로 올렸다(main 상대 400경기 약 61% — docs/benchmarks.md)
-# 순위: 역(거점일 때) > 공학관 > 병원 > 학생회관 — 성혁 지시. 병원 0.5 → 1.0
-FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 1.0, "WATCH": 0.3}
-# 역(STATION)은 상수가 아니라 station_value가 매긴다. 순간이동은 내 역이 2개 이상이라야 열리므로(턴당 1회,
-# 최대 5명) 첫 역과 짝을 완성하는 역의 가치가 전혀 다르다. 9/29 200경기 측정에서 역 보유 수가 여덟 건물 중
-# 승패를 가장 크게 갈랐다: 이긴 경기는 30턴부터 2개를 넘고(1.99 → 2.65), 진 경기는 끝까지 못 넘는다
-# (1.63 → 1.46). 그때 상대는 넘긴다(2.27 → 2.44). docs/benchmarks.md
-STATION_FIRST = 0.0  # 첫 역 — 아직 순간이동이 안 열린다
-STATION_PAIR = 2.5  # 짝을 완성하는 역 — 여기서 순간이동이 열린다
-STATION_EXTRA = 0.3  # 세 번째부터 — 경로 선택지만 는다
-# 짝이 될 역이 이 거리 안에 없으면 역 가치를 통째로 버린다. 감점(×0.5) 44% / 가점(×1.5) 47%로 "역이 몰린
-# 구역이 낫다"가 나왔고(9/29 200경기), 그 방향을 끝까지 밀어 거점이 못 될 역은 아예 쫓지 않는다 — 성혁 지시
-STATION_NEAR = 4
-# 짝 역 주변 건물: 순간이동으로 곧장 닿는 자리에 무엇이 있는가.
-# 병원(전선에서 생산) > 공학관(전투병 값 −1) > 보급소(최초 1회 +15) 순 — 성혁 지시
-STATION_NEIGHBOR = 3
-STATION_NEIGHBOR_VALUE = {"HOSPITAL": 1.0, "ENG": 0.6, "DEPOT": 0.3}
+FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
@@ -731,30 +714,9 @@ def building_value(world: World, b: Building) -> float:
         bonus = HALL_VALUE_PER_TURN * max(0, TOTAL_TURNS - world.turn)
     elif b.kind == "DEPOT":
         bonus = 0.0 if b.id in _depots_taken else DEPOT_VALUE
-    elif b.kind == "STATION":
-        bonus = station_value(world, b)
     else:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
     return score + bonus
-
-
-def station_value(world: World, b: Building) -> float:
-    """역의 기능 가치. 순간이동은 내 역이 2개 이상이라야 열리므로 이 역이 우리에게 몇 번째인지로 갈린다.
-
-    STATION_NEAR 안에 다른 역이 없으면 거점이 못 되므로 가치를 통째로 버린다(0). 있으면 이 역 주변
-    STATION_NEIGHBOR 안의 건물만큼 보너스를 더한다 — 순간이동으로 곧장 닿는 자리이기 때문이다.
-    우리가 이미 가진 역에도 같은 값이 나온다: 잃으면 짝이 깨지므로 지킬 가치도 그만큼이다.
-    """
-    others = [s for s in world.buildings.values() if s.kind == "STATION" and s.id != b.id]
-    if not any(manhattan(b.pos, s.pos) <= STATION_NEAR for s in others):
-        return 0.0
-    mine = [s for s in others if s.owner == world.me]
-    if not mine:
-        return STATION_FIRST
-    base = STATION_PAIR if len(mine) == 1 else STATION_EXTRA
-    near = sum(STATION_NEIGHBOR_VALUE.get(o.kind, 0.0) for o in world.buildings.values()
-               if o.id != b.id and manhattan(o.pos, b.pos) <= STATION_NEIGHBOR)
-    return base + near
 
 
 def is_center(world: World, b: Building) -> bool:

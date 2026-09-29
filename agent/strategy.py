@@ -258,6 +258,13 @@ KILL_REACH = 0
 # 동수 공격: 급습·러시 과제의 필요 인원을, 우리 깃발병이 ATTACK_TIE걸음 안에 있으면 "위협 + 1~2"에서 "위협"으로 줄인다(0 = 끔).
 # 서버 상대는 우리 건물 위 인원과 같은 수로 들어와 상쇄시킨 뒤 깃발병으로 중립화했다(상쇄 패배 23번)
 ATTACK_TIE = 0
+# 병력 덩어리로 쓰기. 진 경기 20~80턴 우리 전투병의 32%가 먼 목표로 이동 중이었고, 한 턴 전투병 과제 칸이 16~20개로 쪼개져
+# 10~50턴 전투 뒤 상대만 남은 비율이 46~75%였다.
+# 과제 수 제한: 한 턴에 채우는 전투병 과제를 TASK_LIMIT개까지만 열고, 남는 전투병은 적 깃발병을 쫓는 대신 고른 과제 중
+# 가장 가까운 곳에 합류한다(0 = 끔)
+TASK_LIMIT = 0
+# 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
+DIST_POWER = 1.0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -1028,7 +1035,7 @@ def assign_warriors(
             far = chosen[-1][0]
             if SH_INERTIA and task.pos in sticky:  # 지난 턴에 맡던 과제는 SH_INERTIA칸 더 가깝다고 친다
                 far = max(0, far - SH_INERTIA)
-            score = task.value / (1 + far)
+            score = task.value / (1 + far) ** DIST_POWER
             if best is None or score > best[0]:
                 best = (score, task, chosen)
         if best is None:
@@ -1040,6 +1047,17 @@ def assign_warriors(
         cells = [c for c in cells if c[1] > 0]
         arrival[task.pos] = chosen[-1][0]
         remaining.remove(task)
+        if TASK_LIMIT and len(arrival) >= TASK_LIMIT:
+            break
+    if TASK_LIMIT and arrival and cells:  # 남는 전투병은 고른 과제 중 가장 가까운 곳에 합류한다
+        rest = []
+        for pos, n in cells:
+            near = min(arrival, key=lambda goal: (dist_to(goal).get(pos, 10**6), goal))
+            if pos in dist_to(near):
+                plan += [(pos, near)] * n
+            else:
+                rest.append([pos, n])
+        cells = rest
     return plan, [pos for pos, n in cells for _ in range(n)], arrival
 
 

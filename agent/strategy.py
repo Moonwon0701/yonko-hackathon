@@ -203,6 +203,12 @@ ENG_DEFICIT = 0
 # +3.8·+1.0%p. 강습 흉내 봇 상대는 76.8 → 75.9%로 그대로 — 강습을 막는 것이 아니라 초반 공학관 수비가 두꺼워진 효과
 ENG_WATCH_REACH = 5
 ENG_WATCH_UNTIL = 30
+# 국면 전환 실험. 현진 봇 상대 300경기에서 31턴 뒤 97~100%의 턴이 위협 대응(THREAT)이라 다른 국면이 거의 돌지 않았다.
+# 열세: 적 전투병이 우리보다 BEHIND_MARGIN명 이상 많으면 러시·초소·급습·전선을 끄고 지키는 국면(0 = 끔). 진 경기는 21~110턴의
+# 37%가 전투병 10명 넘게 뒤진 턴이었다. 굳히기 먼저: HOLD 조건(LATE_TURN 뒤 추정 점수 앞섬)이면 위협 대응보다 굳히기(0 = 끔).
+# 110턴에 앞선 141판 중 26판을 역전당했다
+BEHIND_MARGIN = 0
+HOLD_FIRST = 0
 DEFICIT_VALUE = 6.0
 DEFICIT_EXTRA = 2
 DEFICIT_CAPTURE = 3.0
@@ -510,9 +516,11 @@ def phase_conditions(world: World, pressured: list[tuple[Building, int]]) -> dic
     theirs = sum(estimated_score(world, b) for b in world.owned(enemy))
     my_w = sum(n for _, n in world.units_of(me, "W"))
     enemy_w = sum(n for _, n in world.units_of(enemy, "W"))
+    hold = world.turn >= LATE_TURN and mine > theirs
     return {
-        "THREAT": pressure >= THREAT_PRESSURE,
-        "HOLD": world.turn >= LATE_TURN and mine > theirs,
+        "BEHIND": BEHIND_MARGIN > 0 and enemy_w >= my_w + BEHIND_MARGIN,
+        "THREAT": pressure >= THREAT_PRESSURE and not (HOLD_FIRST and hold),
+        "HOLD": hold,
         "ATTACK": my_w >= enemy_w + ATTACK_MARGIN and bool(world.owned(enemy)),
         "DEFICIT": bool(ENG_DEFICIT) and world.warrior_cost(me) > world.warrior_cost(enemy),
         "EXPAND": True,
@@ -1098,6 +1106,10 @@ def warriors(extra: int) -> Node:
 
 PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
+    phase_branch(
+        "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), warriors(2),
+    ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
         capture(steal=1.0, danger=0.5), kill(), escort(), guard(2.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(2),

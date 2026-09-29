@@ -255,6 +255,9 @@ DEFEND_MARGIN = 0
 # 늘 낸다, 0 = 끔). 진 경기 20~80턴 우리 전투병의 32%가 건물에서 떨어진 우리 진영 칸에서 평균 8.4걸음 떨어진 목표로 가는
 # 중이었고(이긴 경기 21%, 5.2걸음), 그 목표 중 가장 많은 것이 처치(22%)
 KILL_REACH = 0
+# 동수 공격: 급습·러시 과제의 필요 인원을, 우리 깃발병이 ATTACK_TIE걸음 안에 있으면 "위협 + 1~2"에서 "위협"으로 줄인다(0 = 끔).
+# 서버 상대는 우리 건물 위 인원과 같은 수로 들어와 상쇄시킨 뒤 깃발병으로 중립화했다(상쇄 패배 23번)
+ATTACK_TIE = 0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -771,8 +774,19 @@ def rush_tasks(t: Turn) -> list[Task]:
     for b in t.others:
         dist = t.dist_to(b.pos)
         if b.kind == "ENG" and dist.get(away, 99) < dist.get(home, 99):
-            tasks.append(Task("러시", "W", b.pos, t.threat.get(b.pos, 0) + RUSH_EXTRA, RUSH_VALUE))
+            tasks.append(Task("러시", "W", b.pos, attack_need(t, b, RUSH_EXTRA), RUSH_VALUE))
     return tasks
+
+
+def attack_need(t: Turn, b: Building, extra: int) -> int:
+    """상대 건물 `b`에 들어갈 전투병 수: 그 칸 위협 + `extra`. ATTACK_TIE가 켜져 있고 우리 깃발병이 ATTACK_TIE걸음 안에
+    있으면 위협만큼(최소 1): 동수면 서로 상쇄되어 남은 전투병이 없으므로 따라 들어간 우리 깃발병이 살아남아 중립화한다."""
+    threat = t.threat.get(b.pos, 0)
+    if ATTACK_TIE > 0:
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= ATTACK_TIE for p, _ in t.flags):
+            return max(1, threat)
+    return threat + extra
 
 
 def own_eng_safe(t: Turn) -> bool:
@@ -882,7 +896,7 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     world = t.world
     if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
         return []
-    return [Task("급습", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * weight)
+    return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight)
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]
 
 

@@ -275,6 +275,12 @@ TASK_MERGE = 1  # 1 = 남는 전투병을 고른 과제에 합류, 0 = 예전처
 # 맞바꾼 것이었다(나머지는 같은 목표에서 위협 때문에 물러남)
 FLAG_INERTIA = 1.0
 _flag_goal: dict[Pos, set[Pos]] = {}  # 지난 턴 이동 뒤 칸 → 그 칸 깃발병들의 목표 칸
+# 깃발병 사망. 9/29 22:00 12판 120턴까지 85명(판당 7명)을 재현하면 64명은 이미 포위되어(지금 칸도 이웃도 위험) "위험해도 목표
+# 쪽으로" 가지에서, 10명은 위험한 칸에 머물다, 11명은 안전하다고 본 칸에서 죽었다(적 병원 생산 8 · 적 역 순간이동 3).
+# 두 걸음 앞 보기: 목표 쪽으로 나아갈 칸은 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병일 때만 (0 = 끔)
+FLAG_LOOKAHEAD = 0
+# 적 병원 생산: 위협 맵에 상대 병원에서 이번 턴 만들 수 있는 전투병을 더한다 (0 = 끔, 본진만)
+HOSPITAL_THREAT = 0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 
@@ -525,12 +531,23 @@ def move_flags(t: Turn) -> None:
         # 전투병 수가 같으면 서로 상쇄되고 남은 전투병이 없어 깃발병은 살아남는다
         return threat.get(pos, 0) <= w_after[pos]
 
+    def ahead(pos: Pos) -> bool:
+        """나아갈 칸: 안전하고, FLAG_LOOKAHEAD면 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병(다음 턴 포위 대비)."""
+        if not safe(pos):
+            return False
+        if not FLAG_LOOKAHEAD:
+            return True
+        dist = t.dist_to(pos)
+        enemy = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= 2)
+        ours = sum(n for p, n in w_after.items() if dist.get(p, 99) <= 1)
+        return enemy <= ours
+
     f_steps: Counter[tuple[Pos, Pos]] = Counter()
     goals: dict[Pos, set[Pos]] = {}  # 이동 뒤 칸 → 그 칸 깃발병들의 목표 (다음 턴 FLAG_INERTIA)
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
-        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold)
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead)
         if step:
             f_steps[(pos, step)] += 1
         goals.setdefault(step or pos, set()).add(task.pos)
@@ -968,9 +985,10 @@ class FlagMove:
 
     def __init__(
         self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
-        safe: Callable[[Pos], bool], hold: bool,
+        safe: Callable[[Pos], bool], hold: bool, ahead: Callable[[Pos], bool] | None = None,
     ) -> None:
         self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
+        self.ahead = ahead or safe  # 목표 쪽으로 나아갈 칸의 판단 (기본 = 안전)
         self.here = dist.get(pos)
         neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
         self.neighbors = [n for n in neighbors if n in dist]
@@ -996,13 +1014,14 @@ def flag_step(
     order: tuple[Pos, ...],
     safe: Callable[[Pos], bool],
     hold: bool,
+    ahead: Callable[[Pos], bool] | None = None,
 ) -> Pos | None:
     """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
     피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
     """
-    m = FlagMove(pos, goal, dist, order, safe, hold)
+    m = FlagMove(pos, goal, dist, order, safe, hold, ahead)
     FLAG_TREE.tick(m)
     return m.step
 
@@ -1101,10 +1120,16 @@ def spawn_site(sites: list[Pos], goal_dist: dict[Pos, int], threat: dict[Pos, in
 
 
 def enemy_spawnable(world: World) -> list[tuple[Pos, int]]:
-    """상대가 이번 턴 본진에서 새로 만들 수 있는 전투병 (생산한 유닛은 같은 턴에 바로 움직인다)."""
+    """상대가 이번 턴 본진에서 새로 만들 수 있는 전투병 (생산한 유닛은 같은 턴에 바로 움직인다).
+    HOSPITAL_THREAT면 상대 병원마다 같은 수를 더한다(어느 곳에서 만들지 모르므로 곳마다 최대)."""
     enemy = world.enemy
     n = world.gold[enemy] // world.warrior_cost(enemy)
-    return [(world.map.bases[enemy], n)] if n else []
+    if not n:
+        return []
+    sites = [world.map.bases[enemy]]
+    if HOSPITAL_THREAT:
+        sites += [b.pos for b in world.owned(enemy, "HOSPITAL")]
+    return [(pos, n) for pos in sites]
 
 
 def with_spawned(
@@ -1343,7 +1368,7 @@ FLAG_TREE = Selector(
     "깃발병 한 칸",
     Sequence("목표에 닿을 수 없음", Condition("목표까지 경로 없음", lambda m: m.here is None), Act("제자리", lambda m: None)),
     Act("목표 쪽 안전한 칸으로", lambda m: m.go(next(
-        (n for n in m.closer if m.safe(n) and m.enterable(n)), None))),
+        (n for n in m.closer if m.ahead(n) and m.enterable(n)), None))),
     Sequence("대기", Condition("지금 칸이 안전", lambda m: m.safe(m.pos)), Act("제자리", lambda m: None)),
     Act("가장 목표에 가까운 안전한 이웃으로 피하기", lambda m: m.go(min(
         (n for n in m.neighbors if m.safe(n)), key=lambda n: m.dist[n], default=None))),

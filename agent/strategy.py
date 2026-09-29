@@ -240,6 +240,21 @@ _served: set[Pos] = set()  # 지난 턴에 전투병을 받은 과제 칸 (관�
 DEFICIT_VALUE = 6.0
 DEFICIT_EXTRA = 2
 DEFICIT_CAPTURE = 3.0
+# ---- 9/29 22:00 리더보드 분석 스위치 (moonwon/unit-ops, 모두 기본 끔 = 예전 동작) ----
+# 그 회차에 우리 학생회관·공학관을 잃은 56번 중 30번은 적 전투병 없이 깃발병 혼자 들어왔다(점령한 우리 깃발병이 떠나면 전투병이
+# 없고, 지키기는 적 깃발병이 GUARD_RADIUS 안에 와야 켜져 4~8걸음 밖 전투병이 1~2턴 늦음). 23번은 상쇄 패배였다(적이 옆 칸에
+# 쌓다가 동수가 되는 턴에 들어옴, 우리는 "위협 + 1"을 계산했지만 증원이 2걸음 밖이라 한 턴 늦음).
+# 경제 건물 상주: 우리 학생회관·공학관마다 전투병 ECON_GARRISON명(가치 GARRISON_VALUE, 0 = 끔)
+ECON_GARRISON = 0
+GARRISON_VALUE = 3.0
+# 경제 건물 조기 경보: 적 깃발병이 이 걸음 안에 오면 우리 학생회관·공학관을 위협받는 건물로 본다(0 = GUARD_RADIUS 그대로)
+ECON_GUARD_RADIUS = 0
+# 경제 건물 지키기·몰아내기 필요 인원에 더하는 여유 (0 = 끔)
+DEFEND_MARGIN = 0
+# 깃발병 쫓기 제한: 적 깃발병 처치 과제를 그 깃발병이 우리 전투병 KILL_REACH걸음 안에 있을 때만 낸다(우리 건물 위 깃발병은
+# 늘 낸다, 0 = 끔). 진 경기 20~80턴 우리 전투병의 32%가 건물에서 떨어진 우리 진영 칸에서 평균 8.4걸음 떨어진 목표로 가는
+# 중이었고(이긴 경기 21%, 5.2걸음), 그 목표 중 가장 많은 것이 처치(22%)
+KILL_REACH = 0
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -530,12 +545,14 @@ def note() -> str:
 def pressured_buildings(
     world: World, enemy_flags: dict[Pos, int], dist_to: Callable[[Pos], dict[Pos, int]],
 ) -> list[tuple[Building, int]]:
-    """적 깃발병이 GUARD_RADIUS 안에 들어온 우리 건물과, 가장 가까운 적 깃발병까지의 거리."""
+    """적 깃발병이 GUARD_RADIUS(경제 건물은 ECON_GUARD_RADIUS가 더 크면 그것) 안에 들어온 우리 건물과, 가장 가까운 적
+    깃발병까지의 거리."""
     found = []
     for b in world.owned(world.me):
         dist = dist_to(b.pos)
         near = min((dist[p] for p in enemy_flags if p in dist), default=None)
-        if near is not None and near <= GUARD_RADIUS:
+        radius = max(GUARD_RADIUS, ECON_GUARD_RADIUS) if b.kind in ECON_KINDS else GUARD_RADIUS
+        if near is not None and near <= radius:
             found.append((b, near))
     return found
 
@@ -603,10 +620,16 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
 
 def kill_tasks(t: Turn) -> list[Task]:
     """처치: 적 깃발병. 이기려면 그 칸에 모일 수 있는 적 전투병보다 한 명 많아야 한다.
-    건물 위면 그 건물 가치를 더한다: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기."""
+    건물 위면 그 건물 가치를 더한다: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기.
+    KILL_REACH > 0이면 우리 전투병이 KILL_REACH걸음 안에 없는 깃발병은 쫓지 않는다(우리 건물 위 깃발병은 늘 쫓는다)."""
     tasks = []
+    ours = [p for p, _ in t.world.units_of(t.world.me, "W")] if KILL_REACH > 0 else []
     for pos, n in t.enemy_flags.items():
         b = t.world.building_at(pos)
+        if KILL_REACH > 0 and not (b and b.owner == t.world.me):
+            dist = t.dist_to(pos)
+            if not any(dist.get(p, 99) <= KILL_REACH for p in ours):
+                continue
         bonus = t.values[b.id] if b else 0.0
         tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
     if INTERCEPT_VALUE > 0:
@@ -668,21 +691,24 @@ def guard_tasks(t: Turn, weight: float) -> list[Task]:
 
 def defend_need(t: Turn, b: Building) -> int:
     """우리 건물 `b`를 지키는 데 필요한 전투병: 다음 턴 위협 + 1. 경제 건물은 ECON_DEFEND_REACH걸음 안의 적 전투병이
-    더 많으면 그것 + 1."""
+    더 많으면 그것 + 1, 그리고 DEFEND_MARGIN명을 더한다."""
     near = 0
-    if b.kind in ECON_KINDS and ECON_DEFEND_REACH > 1:
+    econ = b.kind in ECON_KINDS
+    if econ and ECON_DEFEND_REACH > 1:
         dist = t.dist_to(b.pos)
         near = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ECON_DEFEND_REACH)
-    return max(t.threat.get(b.pos, 0), near) + 1
+    return max(t.threat.get(b.pos, 0), near) + 1 + (int(DEFEND_MARGIN) if econ else 0)
 
 
 def evict_tasks(t: Turn) -> list[Task]:
     """몰아내기: 적 전투병이 EVICT_RADIUS 안에 온 우리 핵심 건물(EVICT_KINDS) 위에 전투병을 세운다. 건물 위의 적
     전투병은 이겨서 몰아내고, 옆의 적은 올라오지 못하게 한다. 지키기 과제가 이미 있는 건물은 뺀다.
-    ENG_WATCH_UNTIL턴까지 우리 공학관은 ENG_WATCH_REACH걸음 안의 적 전투병부터 보고, 그 수 + 1명을 세운다."""
+    ENG_WATCH_UNTIL턴까지 우리 공학관은 ENG_WATCH_REACH걸음 안의 적 전투병부터 보고, 그 수 + 1명을 세운다.
+    ECON_GARRISON > 0이면 지키기·몰아내기가 없는 우리 경제 건물에 상주 과제(전투병 ECON_GARRISON명)를 더한다."""
     guarded = {b.id for b, _ in t.pressured}
     watch = ENG_WATCH_REACH > 0 and t.world.turn <= ENG_WATCH_UNTIL
     tasks = []
+    quiet = []  # 몰아내기가 필요 없는 경제 건물 (상주 후보)
     for b in t.world.owned(t.world.me):
         if b.kind not in EVICT_KINDS or b.id in guarded:
             continue
@@ -696,6 +722,10 @@ def evict_tasks(t: Turn) -> list[Task]:
             need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ENG_WATCH_REACH) + 1)
         if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
             tasks.append(Task("몰아내기", "W", b.pos, need, t.values[b.id] * weight))
+        elif econ:
+            quiet.append(b)
+    if ECON_GARRISON > 0:
+        tasks += [Task("상주", "W", b.pos, int(ECON_GARRISON), GARRISON_VALUE) for b in quiet]
     return tasks
 
 

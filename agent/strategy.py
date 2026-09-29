@@ -97,6 +97,19 @@ FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
+# 요격: 이동 중인(건물 위가 아닌) 적 깃발병은 지금 칸이 아니라 앞질러 간다. 목적지 = 그 깃발병에서 가장 가까운 상대 것이
+# 아닌 건물. "step" = 목적지 쪽 다음 칸, "goal" = 목적지 건물에서 기다림, "" = 끔(지금 칸). 처치 과제와 과제 없는 전투병의
+# 공통 목표에 함께 쓴다. 양쪽이 동시에 움직이므로 지금 칸으로 가면 도착할 때 깃발병은 이미 한 칸 앞에 있다.
+# 끔: "step"은 1672fe2 상대 54 / 50%, 흉내 봇 풀 79 → 83%, 서버 맵 main 상대 79.6 → 69.4%. "goal"은 13% (docs/benchmarks.md)
+INTERCEPT = ""
+# 미끼: DECOY_FROM~DECOY_UNTIL턴, 우리 깃발병이 DECOY_MIN_FLAGS명 이상이면 점령 중이 아닌 깃발병 중 적 전투병에 가장 가까운
+# 1명을 미끼로 쓴다. 다음 턴 적 전투병이 닿지 못하는 칸(위협 0) 중 적 전투병에 가장 가까운 칸으로 가서, 적이 다가오면 물러나고
+# 멈추면 다시 다가간다(사거리 끝에서 맴돌기). 그런 칸이 없으면 적 전투병에게서 가장 먼 이웃으로 도망친다. UNTIL 0 = 끔.
+# 끔: 1672fe2 상대 1~160 / 1~60 / 20~100턴 33 / 38 / 45%, 깃발병 1명 추가해도 36 / 47%, 흉내 봇 풀 62~70% (지금 79%)
+DECOY_FROM = 1
+DECOY_UNTIL = 0
+DECOY_MIN_FLAGS = 3
+DECOY_EXTRA_FLAG = False  # 미끼 기간에 깃발병 목표 인원·총원 상한을 1명씩 늘린다(미끼로 빠지는 점령 인원을 메운다)
 DANGER_DISCOUNT = 0.5  # 적 전투병이 닿는 건물은 깃발병 목표로서 가치를 이만큼 곱한다
 
 
@@ -240,6 +253,7 @@ def read_situation(t: Turn) -> None:
     stations = sorted((b.pos for b in world.owned(me, "STATION")), key=key)
     t.gates = tuple(stations) if len(stations) >= 2 else ()
     t.enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
+    t.flag_aim = {pos: intercept_cell(t, pos) for pos in t.enemy_flags}  # 적 깃발병 칸 → 전투병이 갈 칸
     t.enemy_warriors = world.units_of(enemy, "W")
     t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
     t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
@@ -277,7 +291,7 @@ def plan_warrior_tasks(t: Turn) -> None:
     t.w_tasks = sorted(t.tasks("W"), key=lambda task: t.key(task.pos))
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
-    t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
+    t.goals = set(t.flag_aim.values()) or {b.pos for b in t.free_targets}
     t.goal_dist = distance_map(t.goals, t.world.map.passable)
 
 
@@ -292,7 +306,8 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    extra_f = 1 if DECOY_EXTRA_FLAG and DECOY_FROM <= world.turn <= DECOY_UNTIL else 0  # 미끼로 빠질 1명을 메운다
+    want_f = max(0, min(len(t.f_tasks) + SPARE_FLAGS + extra_f, MAX_FLAGS + extra_f) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -393,13 +408,42 @@ def move_flags(t: Turn) -> None:
         return threat.get(pos, 0) <= w_after[pos]
 
     f_steps: Counter[tuple[Pos, Pos]] = Counter()
-    for pos, task in t.plan:
+    plan = list(t.plan)
+    decoy = pick_decoy(t, plan)
+    if decoy is not None:
+        pos = plan.pop(decoy)[0]
+        step = decoy_step(t, pos)
+        if step != pos:
+            f_steps[(pos, step)] += 1
+    for pos, task in plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
         step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold)
         if step:
             f_steps[(pos, step)] += 1
     t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
+
+
+def pick_decoy(t: Turn, plan: list[tuple[Pos, Task]]) -> int | None:
+    """미끼로 쓸 깃발병의 `plan` 번호. 조건(DECOY_*)이 안 맞으면 None. 점령 중(목표까지 1걸음 이내)인 깃발병은 빼고,
+    적 전투병에 가장 가까운 한 명(동점이면 정규화 좌표 순). 적 전투병까지 거리표는 t.enemy_w_dist에 남긴다."""
+    world = t.world
+    if not (DECOY_FROM <= world.turn <= DECOY_UNTIL) or not t.enemy_warriors or len(plan) < DECOY_MIN_FLAGS:
+        return None
+    t.enemy_w_dist = distance_map({p for p, _ in t.enemy_warriors}, world.map.passable)
+    cands = [(t.enemy_w_dist.get(pos, 10**6), t.key(pos), i) for i, (pos, task) in enumerate(plan)
+             if t.dist_to(task.pos).get(pos, 99) > 1]
+    return min(cands)[2] if cands else None
+
+
+def decoy_step(t: Turn, pos: Pos) -> Pos:
+    """미끼 깃발병의 다음 칸(제자리 포함). 위협 0인 칸 중 적 전투병에 가장 가까운 칸, 없으면 가장 먼 칸."""
+    passable, dist = t.world.map.passable, t.enemy_w_dist
+    cells = [pos] + [(pos[0] + dx, pos[1] + dy) for dx, dy in t.order if passable((pos[0] + dx, pos[1] + dy))]
+    safe = [c for c in cells if not t.threat.get(c, 0)]
+    if safe:
+        return min(safe, key=lambda c: (dist.get(c, 10**6), t.key(c)))
+    return max(cells, key=lambda c: (dist.get(c, -1), [-v for v in t.key(c)]))
 
 
 def set_priority(t: Turn) -> None:
@@ -501,14 +545,31 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
 
 def kill_tasks(t: Turn) -> list[Task]:
     """처치: 적 깃발병. 이기려면 그 칸에 모일 수 있는 적 전투병보다 한 명 많아야 한다.
-    건물 위면 그 건물 가치를 더한다: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기."""
+    건물 위면 그 건물 가치를 더한다: 우리 건물이면 방어, 중립이면 점령 저지, 상대 건물이면 깃발 뽑기.
+    이동 중인 깃발병은 요격 칸(t.flag_aim, INTERCEPT)으로 간다."""
     tasks = []
     for pos, n in t.enemy_flags.items():
         b = t.world.building_at(pos)
         bonus = t.values[b.id] if b else 0.0
-        tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
+        cell = t.flag_aim[pos]
+        tasks.append(Task("처치", "W", cell, t.threat.get(cell, 0) + 1, KILL_VALUE * n + bonus))
     return tasks
 
+
+def intercept_cell(t: Turn, pos: Pos) -> Pos:
+    """적 깃발병(`pos`)을 잡으러 갈 칸. 건물 위(점령 중)이거나 INTERCEPT가 꺼져 있으면 지금 칸. 아니면 가장 가까운 상대
+    것이 아닌 건물(동점이면 정규화 좌표 순)을 목적지로 보고, "goal"이면 그 건물, "step"이면 그쪽 다음 칸."""
+    world = t.world
+    if not INTERCEPT or world.building_at(pos):
+        return pos
+    aims = [(t.dist_to(b.pos).get(pos), t.key(b.pos), b.pos) for b in world.buildings.values() if b.owner != world.enemy]
+    aims = [a for a in aims if a[0] is not None]
+    if not aims:
+        return pos
+    _, _, goal = min(aims)
+    if INTERCEPT == "goal":
+        return goal
+    return step_along(pos, t.dist_to(goal), t.order) or pos
 
 def escort_tasks(t: Turn) -> list[Task]:
     """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다.

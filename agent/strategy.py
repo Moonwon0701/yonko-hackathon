@@ -156,6 +156,13 @@ RAID_SURPLUS = -99  # 우리 전투병이 적 전투병 + 이 값 이상일 때�
 SQUAD_SIZE = 5
 SQUAD_WEIGHT = 1.0
 SECOND_SQUAD_TURN = 30  # 이 턴부터 별동대 2개 (목표 건물이 서로 다른 깃발병 2명)
+# 중앙 건물(광장·보급소·방송국·중앙 서울역) 확보: 공학관 러시 흉내 봇에게 진 맵은 60턴에 중앙 건물을 내줬다(보급소 0.6 : 1.4,
+# 광장 0.2 : 0.7, 역 1.7 : 2.3 — docs/benchmarks.md). CENTER_CAPTURE = 깃발병 점령 가치 배수(1.0 = 끔),
+# SQUAD_CENTER = 중앙 건물로 가는 깃발병도 별동대 대상(위험하지 않아도).
+# 끔: 7b8b67e 상대 ×1.5 42%, ×2.0 20%, 중앙 호위 54.5%, ×1.5 + 중앙 호위 30%. 흉내 봇 풀 평균 80 / 67 / 76 / 71% (지금 79%).
+# ×1.5는 공학관 러시 상대 56 → 80%지만 직접 대결에서 진다 (docs/benchmarks.md)
+CENTER_CAPTURE = 1.0
+SQUAD_CENTER = False
 # 공학관 러시(흉내 봇 opponents/eng_rush.py의 러시 부분): ENG_RUSH_UNTIL턴까지 상대 캠퍼스 공학관에 전투병
 # "위협 + ENG_RUSH_EXTRA"명(가치 ENG_RUSH_VALUE), 깃발병은 공학관 점령 가치 × ENG_RUSH_CAPTURE. 0이면 끔.
 # 별동대 버전(26fae2a) 상대 시드 200~299: 20 / 40 / 60 / 80 / 100 / 160턴 → 53 / 55 / 63 / 65 / 65 / 60%, 80턴은 300~399 52%.
@@ -547,7 +554,8 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
-                 * (ENG_RUSH_CAPTURE if b.kind == "ENG" and t.eng_rush_on else 1.0))
+                 * (ENG_RUSH_CAPTURE if b.kind == "ENG" and t.eng_rush_on else 1.0)
+                 * (CENTER_CAPTURE if CENTER_CAPTURE != 1.0 and is_center(t.world, b) else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, 1 if pulled or b.owner is None else 2))
     return tasks
 
@@ -679,7 +687,7 @@ def squad_tasks(t: Turn) -> list[Task]:
     cands = []
     for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to):
         b = task.building
-        if b.owner == world.enemy or t.threat.get(b.pos, 0):
+        if b.owner == world.enemy or t.threat.get(b.pos, 0) or (SQUAD_CENTER and is_center(world, b)):
             cands.append((-task.value, t.key(pos), pos, task))
     cands.sort(key=lambda c: c[:2])
     tasks, taken = [], set()

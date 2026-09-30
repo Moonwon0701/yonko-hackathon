@@ -51,6 +51,19 @@ KNOBS: tuple[tuple[str, bool, int], ...] = (
     ("SQUAD_SIZE", True, 1),
     ("RUSH_EXTRA", True, 0),
     ("MIN_WARRIORS", True, 0),
+    # 성혁 기능(strategy.py "성혁 테마 브랜치 기능", 스위치를 켰을 때만 쓰인다). 학생회관·공학관 감쇠 값은 위
+    # HALL_VALUE_PER_TURN · FUNCTION_VALUE.ENG 배수를 따른다
+    ("HOSPITAL_ISOLATED", False, 0),
+    ("STATION_BASE", False, 0),
+    ("FUNCTION_VALUE.LIBRARY", False, 0),
+    ("SH_ESCORT_T1", True, 0),
+    ("SH_ESCORT_T2", True, 0),
+    ("SH_ESCORT_T3", True, 0),
+    # 성혁 decoy-flex 기능 (양동·암살·기동대, 스위치를 켰을 때만 쓰인다)
+    ("DIVERSION_VALUE", False, 0),
+    ("DIVERSION_CAPTURE", False, 0),
+    ("ASSASSIN_BOOST", False, 0),
+    ("MOBILE_WEIGHT", False, 0),
 )
 Z_MAX = 2.5  # 배수 범위 exp(±2.5) ≈ 0.08 ~ 12
 

@@ -7,6 +7,7 @@ learned.W를 파일 내용으로 채운 뒤 main.main()을 부른다.
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,6 +18,20 @@ from agent import learned  # noqa: E402
 
 learned.W.clear()
 learned.W.update(json.loads(Path(sys.argv[2]).read_text()))
+
+# 환경 변수 ES_CFG = "이름=값 이름=값": strategy 상수(스위치)를 덮어쓴다(es_train.py --cfg). "A.B=값"은 dict 상수 A의 키 B.
+# 학습 층이 첫 판단에서 기준값을 읽으므로 여기서 바꾼 값이 기준값이 된다
+if os.environ.get("ES_CFG"):
+    from agent import strategy
+
+    for item in os.environ["ES_CFG"].split():
+        name, value = item.split("=")
+        if "." in name:
+            top, key = name.split(".")
+            setattr(strategy, top, {**getattr(strategy, top), key: float(value)})
+        else:
+            old = getattr(strategy, name)
+            setattr(strategy, name, type(old)(float(value)))
 
 import main  # noqa: E402
 

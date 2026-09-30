@@ -187,11 +187,13 @@ def main() -> None:
     ap.add_argument("--maps", help="검증에 쓸 서버 리플레이 폴더 (없으면 생성 시드 900000~)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--bot", default="experiments/learned", help="학습할 봇 폴더")
+    ap.add_argument("--cfg", default="", help='학습할 봇의 strategy 상수 덮어쓰기 "이름=값 ..." (스위치 켜기, es_bot.py ES_CFG)')
     ap.add_argument("--pool", default="hyunjin", choices=sorted(POOLS), help="상대 풀")
     ap.add_argument("--normal-priority", action="store_true", help="우선순위를 낮추지 않는다")
     args = ap.parse_args()
     global BOT_DIR, POOL
     os.environ["ES_BOT"] = args.bot
+    os.environ["ES_CFG"] = args.cfg  # 작업자 프로세스 → es_bot.py가 읽는다
     BOT_DIR = ROOT / args.bot
     POOL = POOLS[args.pool]
     load_layer()

@@ -25,6 +25,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cands", nargs="+", help="이름=θ.json (비우면 θ = 0)")
     ap.add_argument("--bot", default="experiments/learned_uo")
+    ap.add_argument("--cfg", default="", help='봇의 strategy 상수 덮어쓰기 "이름=값 ..." (es_bot.py ES_CFG)')
     ap.add_argument("--opp", action="append", required=True, help="상대 (여러 번 가능)")
     ap.add_argument("--seed", type=int, default=8400)
     ap.add_argument("--seeds", type=int, default=400)
@@ -32,6 +33,7 @@ def main() -> None:
     ap.add_argument("--jobs", type=int, default=22)
     args = ap.parse_args()
     os.environ["ES_BOT"] = args.bot  # 작업자 프로세스가 es_train을 불러올 때 이 봇 폴더를 쓴다
+    os.environ["ES_CFG"] = args.cfg
     sys.path.insert(0, str(ROOT / "scripts"))
     import es_train
     from sim import mapgen

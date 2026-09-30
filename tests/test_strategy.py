@@ -335,7 +335,8 @@ def test_pickets_go_to_enemy_buildings_without_enemy_flags():
     assert [(task.pos, task.need) for task in strategy.picket_tasks(t)] == [((10, 3), 1)]
 
 
-def test_squad_walks_ahead_of_flags_heading_to_risky_targets():
+def test_squad_walks_ahead_of_flags_heading_to_risky_targets(monkeypatch):
+    monkeypatch.setattr(strategy, "SQUAD_FLEX", 0)  # 고정 인원(SQUAD_FLEX는 적 위협 + 1명)
     # 별동대: 상대 건물(5,3)로 가는 깃발병 (1,3)의 다음 칸 (2,3)에 전투병 SQUAD_SIZE명. 적 전투병이 닿지 않는 중립 건물
     # (5,11)로 가는 깃발병은 위험하지 않아 뺀다. SECOND_SQUAD_TURN 전이므로 1명만
     enemy, safe = building(0, (5, 3), owner="K"), building(1, (5, 11))

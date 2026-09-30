@@ -209,6 +209,17 @@ ENG_DEFICIT = 0
 # +3.8·+1.0%p. 강습 흉내 봇 상대는 76.8 → 75.9%로 그대로 — 강습을 막는 것이 아니라 초반 공학관 수비가 두꺼워진 효과
 ENG_WATCH_REACH = 5
 ENG_WATCH_UNTIL = 30
+# 전선 유지(현진 테마 브랜치): LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만인 동안 우리 캠퍼스 공학관 앞 길목(적 본진 →
+# 공학관 최단 경로에서 공학관으로부터 LINE_DEPTH걸음 앞 칸)에 전투병 "그 칸 LINE_REACH걸음 안 적 전투병 + 1"명을 세운다
+# (가치 = 공학관 가치 × LINE_WEIGHT). 서버에서 우리 공학관을 20턴 안에 잃으면 2-6, 지키면 39-18(docs/benchmarks.md 9/30 분석).
+# 조기 경보(ENG_WATCH)는 적이 5걸음 안에 온 뒤 공학관 위에 서고, 전선은 그보다 앞에서 길을 막는다. LINE_UNTIL 0 = 끔.
+# 끔: 흉내 봇 풀에서 공학관 잃음 41.5 → 33.5%(40턴·2걸음)로 줄지만 daa1888 상대 55.5 / 40.5%(시드 200~299 / 300~399),
+# 서버 맵 55.9%, 학습 봇 상대 44%(daa1888 39%). 60턴·건물 8개까지는 풀 95%지만 46.5 / 42%, 학습 봇 33% (docs/benchmarks.md)
+LINE_UNTIL = 0
+LINE_BUILDINGS = 99
+LINE_DEPTH = 3
+LINE_REACH = 3
+LINE_WEIGHT = 1.0
 # 국면 전환 실험. 현진 봇 상대 300경기에서 31턴 뒤 97~100%의 턴이 위협 대응(THREAT)이라 다른 국면이 거의 돌지 않았다.
 # 열세: 적 전투병이 우리보다 BEHIND_MARGIN명 이상 많으면 러시·초소·급습·전선을 끄고 지키는 국면(0 = 끔). 진 경기는 21~110턴의
 # 37%가 전투병 10명 넘게 뒤진 턴이었다. 굳히기 먼저: HOLD 조건(LATE_TURN 뒤 추정 점수 앞섬)이면 위협 대응보다 굳히기(0 = 끔).
@@ -981,6 +992,41 @@ def retake_tasks(t: Turn) -> list[Task]:
             for b in t.others if recently_lost(t, b)]
 
 
+def line_tasks(t: Turn) -> list[Task]:
+    """전선 유지: LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만이면 우리 캠퍼스 공학관(우리 본진이 더 가까운 우리 공학관)
+    앞 길목 칸(line_cell)에 전투병 "LINE_REACH걸음 안 적 전투병 + 1"명."""
+    world = t.world
+    if world.turn > LINE_UNTIL or len(world.owned(world.me)) >= LINE_BUILDINGS:
+        return []
+    home, away = world.map.bases[world.me], world.map.bases[world.enemy]
+    tasks = []
+    for b in sorted(world.owned(world.me, "ENG"), key=lambda b: t.key(b.pos)):
+        dist = t.dist_to(b.pos)
+        if dist.get(home, 99) >= dist.get(away, 99):
+            continue
+        cell = line_cell(t, b.pos)
+        if cell is None:
+            continue
+        near = t.dist_to(cell)
+        need = sum(n for p, n in t.enemy_warriors if near.get(p, 99) <= LINE_REACH) + 1
+        tasks.append(Task("전선 유지", "W", cell, need, t.values[b.id] * LINE_WEIGHT))
+    return tasks
+
+
+def line_cell(t: Turn, eng: Pos) -> Pos | None:
+    """적 본진에서 `eng`까지 최단 경로 위, `eng`에서 LINE_DEPTH걸음 떨어진 칸. 경로가 그보다 짧으면 적 본진 칸, 없으면 None."""
+    dist = t.dist_to(eng)
+    pos: Pos | None = t.world.map.bases[t.world.enemy]
+    if pos not in dist:
+        return None
+    while dist[pos] > LINE_DEPTH:
+        nxt = step_along(pos, dist, t.order)
+        if nxt is None:
+            break
+        pos = nxt
+    return pos
+
+
 def eng_focus_tasks(t: Turn) -> list[Task]:
     """공학관 집중(열세 국면): 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명. 어느 쪽이든 하나를 먹으면 된다
     — 배정은 가치 / (1 + 가장 먼 전투병 거리)라 적이 덜 지키고 가까운 쪽이 먼저 찬다."""
@@ -1373,6 +1419,11 @@ def retake() -> Node:
     return enable(f"탈환 과제: {RETAKE_MEMORY}턴 안에 잃은 우리 공학관 (RETAKE_VALUE > 0일 때)", "W", retake_tasks)
 
 
+def hold_line() -> Node:
+    return enable(f"전선 유지 과제: LINE_UNTIL턴까지 우리 공학관 {LINE_DEPTH}걸음 앞 길목에 전투병 (근처 적 + 1명)",
+                  "W", line_tasks)
+
+
 def eng_focus() -> Node:
     def on(t: Turn) -> None:
         t.eng_focus = True
@@ -1399,35 +1450,35 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
-        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
     ),
     phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
-        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), warriors(1),
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
     ),
 )
 

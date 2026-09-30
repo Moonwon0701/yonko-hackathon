@@ -23,6 +23,9 @@
 14. > 180세대까지만 돌려보면 몇시야
 15. > 어 180세대로 바꿔줘
 16. > 튜닝본으로 제출본 만들어줘
+17. > 감시 꺼도 돼
+18. > 업로드했어 기록해줘
+19. > 테스트 실패하는 거 고쳐줘
 
 ## 목적
 
@@ -51,7 +54,10 @@
 - 학습을 250세대 → 180세대에서 멈추게 바꾸고(일회용 감시 스크립트, 저장소에 넣지 않음), 멈춘 뒤 새 시드 44000~44599로 튜닝본·원본 비교를 자동 실행
 - 현진·성혁 브랜치 새 push와 원격 브랜치 수를 10분마다 확인(현진 새 push 없음, 마지막은 9/30 21:26 `c711702` 스위치 꺼 둠)
 - `agent/strategy.py` = `experiments/learned_eg/agent/strategy.py`(선제 수비 + hunters 코드, 기동대 수정만 켬), `agent/learned.py` W = 4차 180세대 → `ee4ea4b`, `dist/bot-ee4ea4b.zip`
-- `docs/benchmarks.md` "학습 (진화 전략)"에 4차 줄
+- `docs/benchmarks.md` "학습 (진화 전략)"에 4차 줄, "서버 리더보드"에 10/1 08:00 제출(`ee4ea4b`) 줄
+- `tests/conftest.py`(새 파일): 테스트마다 `agent.strategy`·`learned`·`forecast`의 모듈 전역(턴을 넘는 기억, 학습 층이 바꾼 상수, BT 상태)을
+  import 직후 값으로 되돌리는 autouse fixture. 원인 추적: 실패는 `test_official`(한 프로세스에서 여러 경기)과 `test_strategy` 앞 테스트들의
+  기억이 겹칠 때만 재현(두 파일 각각, 또는 `test_official` 테스트 하나와 실패 테스트만으로는 통과), 전투병 수가 1 → 3, 5 → 4로 바뀜
 
 ## 사람이 한 것
 
@@ -68,3 +74,4 @@
 - 4차 180세대 새 시드 600판씩: 대 `e30333c` 53.2%, 대 `074803e` 57.3%(원본 53.7), 대 `strong_wide` 80.3%(원본 78.2)
 - 루트 봇 `ee4ea4b` 대 학습 봇 180세대 θ 40판 모두 무승부(행동 동일). `build_submission.py` 가짜 입력 160턴 통과(턴 최대 2.7 ms)
 - `pytest tests` 855 통과 · 2 실패: `test_official` 뒤에 돌 때만 `test_strategy` 2개 실패(경기 간 기억이 한 프로세스에 남음). 각 파일 단독 통과, `e30333c`는 857 모두 통과
+- `tests/conftest.py` 추가 뒤 `pytest tests` 857개 모두 통과. 봇 코드(`agent/`)는 그대로라 제출본 동작 변화 없음

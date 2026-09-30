@@ -64,6 +64,10 @@ KNOBS: tuple[tuple[str, bool, int], ...] = (
     ("DIVERSION_CAPTURE", False, 0),
     ("ASSASSIN_BOOST", False, 0),
     ("MOBILE_WEIGHT", False, 0),
+    # 선제 수비 (10/1, EARLY_GUARD > 0일 때 쓰인다). EARLY_GUARD가 GUARD_RADIUS(3) 이하로 내려가면 사실상 꺼진다
+    ("EARLY_GUARD_WEIGHT", False, 0),
+    ("EARLY_GUARD", True, 0),
+    ("EARLY_SLACK", True, 0),
 )
 Z_MAX = 2.5  # 배수 범위 exp(±2.5) ≈ 0.08 ~ 12
 

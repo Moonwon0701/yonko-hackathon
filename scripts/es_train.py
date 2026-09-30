@@ -64,6 +64,17 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "merged337": {  # 9/30 20:00 제출본(337ab49 = 26fa986 + 성혁 기능 선별 조합, experiments/learned_sh) 위에서 이어 학습.
+        # 주 상대 = 제출본 자신, 그다음 strong_wide와 한 단계 전 학습 봇. 나머지는 퇴보 방지용
+        "337ab49": ("git:337ab49", 4),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "26fa986": ("git:26fa986", 2),
+        "daa1888": ("git:daa1888", 1),
+        "7941b88": ("git:7941b88", 1),
+        "hyunjin": ("git:7b8b67e", 1),
+        "sunghyuk": ("git:73e2691", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
         "daa1888": ("git:daa1888", 4),
         "7941b88": ("git:7941b88", 2),

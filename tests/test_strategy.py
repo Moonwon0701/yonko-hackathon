@@ -40,9 +40,10 @@ def test_flags_split_across_buildings():
     assert sorted((m.dst, m.count) for m in moves) == [((1, 6), 1), ((1, 8), 1)]
 
 
-def test_reserves_capture_cost_after_income():
+def test_reserves_capture_cost_after_income(monkeypatch):
     # 깃발병이 중립 광장 위에 있다: 비용 4는 이번 턴 수입(10)으로 충분하므로 자원 5를 모두 생산에 쓴다.
-    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명)
+    # (깃발병이 MIN_FLAGS보다 적으므로 깃발병 1명). 초반 광장 제외(SH_PLAZA_SKIP)는 이 검사와 무관하므로 끈다
+    monkeypatch.setattr(strategy, "SH_PLAZA_SKIP", 0)
     w = world([building(0, (7, 7), "PLAZA")], units={("Y", "F", (7, 7)): 1}, gold=5)
     assert Spawn("F", 1) in strategy.decide(w)
 
@@ -264,7 +265,6 @@ def test_flags_skip_hospital_that_enemy_warriors_can_reach_but_warriors_do_not()
 def test_warriors_go_to_key_building_when_enemy_warriors_come_near():
     # 적 깃발병 없이 적 전투병만 우리 학생회관 2칸 안에 왔다: 전투병이 학생회관으로 간다 (9/28 리더보드 패배 경기).
     # 경제 건물은 ECON_DEFEND_REACH(2)걸음 안의 적 2명 + 1 = 3명을 보낸다 (다음 턴 위협만 세면 1명)
-    # (이 테스트와 아래 병원 테스트는 moonwon/eval-tuning adffd5b에서 가져옴)
     w = world([building(0, (5, 5), owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
     assert Move((5, 8), "W", 3, (5, 7)) in strategy.decide(w)
@@ -275,17 +275,6 @@ def test_non_economic_key_building_counts_only_next_turn_threat():
     w = world([building(0, (5, 5), kind="HOSPITAL", owner="Y", score=1)],
               units={("Y", "W", (5, 8)): 3, ("K", "W", (5, 3)): 2}, gold=0)
     assert Move((5, 8), "W", 1, (5, 7)) in strategy.decide(w)
-
-
-def test_eng_rush_targets_only_enemy_side_eng_until_rush_turn():
-    # 공학관 러시: 상대 본진(14,7)이 더 가까운 공학관에만 "위협 + ENG_RUSH_EXTRA"명, ENG_RUSH_UNTIL턴이 지나면 없다
-    buildings = [building(0, (11, 7), "ENG"), building(1, (3, 7), "ENG")]
-    t = strategy.Turn(world(buildings, turn=5))
-    strategy.read_situation(t)
-    assert [(task.pos, task.need) for task in strategy.eng_rush_tasks(t)] == [((11, 7), strategy.ENG_RUSH_EXTRA)]
-    t = strategy.Turn(world(buildings, turn=strategy.ENG_RUSH_UNTIL + 1))
-    strategy.read_situation(t)
-    assert strategy.eng_rush_tasks(t) == []
 
 
 def test_distance_map_links_stations_with_cost_one():
@@ -323,3 +312,65 @@ def test_warriors_beyond_teleport_queue_walk_and_do_not_bounce(monkeypatch):
     assert sum(m.count for m in moves if m.src == (7, 1)) == 15  # 10명은 역에서 기다리고 15명은 걷는다
     assert all(m.dst == (7, 2) for m in moves if m.src == (7, 1))
     assert not [m for m in moves if m.src == (6, 1) and m.dst == (7, 1)]
+
+
+def situation(w):
+    t = strategy.Turn(w)
+    strategy.read_situation(t)
+    return t
+
+
+def test_rush_targets_only_enemy_side_eng_until_rush_turn():
+    # 공학관 러시: 상대 본진(14,7)이 더 가까운 공학관에만 "위협 + RUSH_EXTRA"명, RUSH_UNTIL턴이 지나면 없다
+    buildings = [building(0, (11, 7), "ENG"), building(1, (3, 7), "ENG")]
+    tasks = strategy.rush_tasks(situation(world(buildings, turn=5)))
+    assert [(task.pos, task.need) for task in tasks] == [((11, 7), strategy.RUSH_EXTRA)]
+    assert strategy.rush_tasks(situation(world(buildings, turn=strategy.RUSH_UNTIL + 1))) == []
+
+
+def test_pickets_go_to_enemy_buildings_without_enemy_flags():
+    # 초소: 상대 건물마다 1명. 중립 건물과 적 깃발병이 선 상대 건물(처치 과제가 맡음)은 뺀다
+    buildings = [building(0, (10, 3), owner="K"), building(1, (10, 11), owner="K"), building(2, (7, 7), "PLAZA")]
+    t = situation(world(buildings, units={("K", "F", (10, 11)): 1}))
+    assert [(task.pos, task.need) for task in strategy.picket_tasks(t)] == [((10, 3), 1)]
+
+
+def test_squad_walks_ahead_of_flags_heading_to_risky_targets():
+    # 별동대: 상대 건물(5,3)로 가는 깃발병 (1,3)의 다음 칸 (2,3)에 전투병 SQUAD_SIZE명. 적 전투병이 닿지 않는 중립 건물
+    # (5,11)로 가는 깃발병은 위험하지 않아 뺀다. SECOND_SQUAD_TURN 전이므로 1명만
+    enemy, safe = building(0, (5, 3), owner="K"), building(1, (5, 11))
+    t = situation(world([enemy, safe], units={("Y", "F", (1, 3)): 1, ("Y", "F", (1, 11)): 1}, turn=5))
+    t.flags = sorted(t.world.units_of("Y", "F"))
+    t.f_tasks = [strategy.Task("점령", "F", b.pos, 1, 5.0, b, 1) for b in (enemy, safe)]
+    tasks = strategy.squad_tasks(t)
+    assert [(task.pos, task.need) for task in tasks] == [((2, 3), strategy.SQUAD_SIZE)]
+
+
+def test_retake_targets_eng_we_lost_recently(monkeypatch):
+    # 탈환: 10턴에 우리 것이던 공학관이 12턴에 중립(적 깃발병이 점령 중) → 그 칸에 "위협 + RETAKE_EXTRA"명.
+    # RETAKE_MEMORY턴이 지나면, 또는 스위치가 꺼져 있으면 과제가 없다
+    monkeypatch.setattr(strategy, "_last_owned", {})
+    monkeypatch.setattr(strategy, "RETAKE_VALUE", 4.0)
+    situation(world([building(0, (3, 7), "ENG", owner="Y")], turn=10))
+    lost = [building(0, (3, 7), "ENG")]
+    t = situation(world(lost, units={("K", "F", (3, 7)): 1}, turn=12))
+    assert [(task.pos, task.need) for task in strategy.retake_tasks(t)] == [((3, 7), strategy.RETAKE_EXTRA)]
+    later = situation(world(lost, turn=10 + strategy.RETAKE_MEMORY + 1))
+    assert strategy.retake_tasks(later) == []
+    monkeypatch.setattr(strategy, "RETAKE_VALUE", 0.0)
+    assert strategy.retake_tasks(t) == []
+
+
+def test_eng_deficit_phase_focuses_warriors_on_eng(monkeypatch):
+    # 공학관 열세: 상대만 공학관을 가지면(전투병 값 3 : 2) DEFICIT 국면, 우리 것이 아닌 공학관 전부에 전투병 과제
+    monkeypatch.setattr(strategy, "ENG_DEFICIT", 1)
+    buildings = [building(0, (11, 7), "ENG", owner="K"), building(1, (3, 3), "ENG"), building(2, (5, 11))]
+    w = world(buildings, units={("Y", "W", (1, 7)): 5}, gold=0)
+    strategy.decide(w)
+    assert strategy.note() == "DEFICIT"
+    t = situation(w)
+    assert sorted(task.pos for task in strategy.eng_focus_tasks(t)) == [(3, 3), (11, 7)]
+    monkeypatch.setattr(strategy, "ENG_DEFICIT", 0)  # 꺼도 국면 유지(Latch)로 HOLD_TURNS - 1턴은 남는다
+    for _ in range(strategy.HOLD_TURNS):
+        strategy.decide(w)
+    assert strategy.note() != "DEFICIT"

@@ -220,6 +220,19 @@ LINE_BUILDINGS = 99
 LINE_DEPTH = 3
 LINE_REACH = 3
 LINE_WEIGHT = 1.0
+LINE_EXTRA = 0  # 길목마다 더 세울 인원
+LINE_PATHS = 1  # 2 이상이면 적 본진에서 오는 최단 경로들이 지나는 길목을 이만큼까지 (1 = 한 경로의 한 칸)
+LINE_KINDS = {"ENG"}  # 길목을 지킬 우리 캠퍼스 건물 종류
+# 강화도 끔 (40턴·2걸음 기준, daa1888 상대 시드 200~299 / 300~399): +2명 52 / 41.5%, 길목 3칸 48%, 학생회관 57 / 44%,
+# 학생회관 +2명 55 / 37%, 셋 다 38%. 학습 봇 상대 24~37% (daa1888 39%) (docs/benchmarks.md)
+# 창(일직선 공격): SPEAR_FROM~SPEAR_UNTIL턴, 우리 본진 → 적 본진 최단 경로에서 SPEAR_WIDTH걸음 이내로 벗어난 건물 중 우리 것이 아닌
+# 가장 가까운 건물 하나에 전투병 "위협 + SPEAR_EXTRA"명(가치 SPEAR_VALUE). 가져오면 다음 목표가 직선을 따라 앞으로. 0 = 끔.
+# 끔: daa1888 상대 1턴부터 +2 / +5명 44 / 24%, 30턴부터 42 / 45%, 흉내 봇 풀 79~89% (daa1888 90%)
+SPEAR_FROM = 0
+SPEAR_UNTIL = 160
+SPEAR_EXTRA = 2
+SPEAR_VALUE = 6.0
+SPEAR_WIDTH = 2
 # 국면 전환 실험. 현진 봇 상대 300경기에서 31턴 뒤 97~100%의 턴이 위협 대응(THREAT)이라 다른 국면이 거의 돌지 않았다.
 # 열세: 적 전투병이 우리보다 BEHIND_MARGIN명 이상 많으면 러시·초소·급습·전선을 끄고 지키는 국면(0 = 끔). 진 경기는 21~110턴의
 # 37%가 전투병 10명 넘게 뒤진 턴이었다. 굳히기 먼저: HOLD 조건(LATE_TURN 뒤 추정 점수 앞섬)이면 위협 대응보다 굳히기(0 = 끔).
@@ -993,24 +1006,62 @@ def retake_tasks(t: Turn) -> list[Task]:
 
 
 def line_tasks(t: Turn) -> list[Task]:
-    """전선 유지: LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만이면 우리 캠퍼스 공학관(우리 본진이 더 가까운 우리 공학관)
-    앞 길목 칸(line_cell)에 전투병 "LINE_REACH걸음 안 적 전투병 + 1"명."""
+    """전선 유지: LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만이면 우리 캠퍼스 LINE_KINDS 건물(우리 본진이 더 가까운 것)
+    앞 길목 칸(line_cells)마다 전투병 "LINE_REACH걸음 안 적 전투병 + 1 + LINE_EXTRA"명."""
     world = t.world
     if world.turn > LINE_UNTIL or len(world.owned(world.me)) >= LINE_BUILDINGS:
         return []
     home, away = world.map.bases[world.me], world.map.bases[world.enemy]
     tasks = []
-    for b in sorted(world.owned(world.me, "ENG"), key=lambda b: t.key(b.pos)):
+    for b in sorted((b for b in world.owned(world.me) if b.kind in LINE_KINDS), key=lambda b: t.key(b.pos)):
         dist = t.dist_to(b.pos)
         if dist.get(home, 99) >= dist.get(away, 99):
             continue
-        cell = line_cell(t, b.pos)
-        if cell is None:
-            continue
-        near = t.dist_to(cell)
-        need = sum(n for p, n in t.enemy_warriors if near.get(p, 99) <= LINE_REACH) + 1
-        tasks.append(Task("전선 유지", "W", cell, need, t.values[b.id] * LINE_WEIGHT))
+        for cell in line_cells(t, b.pos):
+            near = t.dist_to(cell)
+            need = sum(n for p, n in t.enemy_warriors if near.get(p, 99) <= LINE_REACH) + 1 + LINE_EXTRA
+            tasks.append(Task("전선 유지", "W", cell, need, t.values[b.id] * LINE_WEIGHT))
     return tasks
+
+
+def line_cells(t: Turn, pos: Pos) -> list[Pos]:
+    """건물 `pos`의 길목 칸들. LINE_PATHS가 1이면 line_cell 한 칸, 아니면 적 본진 → `pos` 최단 경로들이 지나는 칸 중 `pos`에서
+    LINE_DEPTH걸음인 칸을 정규화 좌표 순으로 LINE_PATHS개까지."""
+    if LINE_PATHS <= 1:
+        cell = line_cell(t, pos)
+        return [] if cell is None else [cell]
+    dist, from_away = t.dist_to(pos), t.dist_to(t.world.map.bases[t.world.enemy])
+    total = from_away.get(pos)
+    if total is None:
+        return []
+    cells = [c for c, d in dist.items() if d == LINE_DEPTH and from_away.get(c, 99) + LINE_DEPTH == total]
+    return sorted(cells, key=t.key)[:LINE_PATHS]
+
+
+def spear_tasks(t: Turn) -> list[Task]:
+    """창: SPEAR_FROM~SPEAR_UNTIL턴, 우리 본진 → 적 본진 직선(최단 경로)에서 SPEAR_WIDTH걸음 이내로 벗어난 건물 중 우리 것이 아닌
+    가장 가까운(우리 본진에서) 건물 하나에 전투병 "위협 + SPEAR_EXTRA"명."""
+    world = t.world
+    if SPEAR_FROM <= 0 or not SPEAR_FROM <= world.turn <= SPEAR_UNTIL:
+        return []
+    home, away = world.map.bases[world.me], world.map.bases[world.enemy]
+    straight = t.dist_to(away).get(home)
+    if straight is None:
+        return []
+    best = None
+    for b in world.buildings.values():
+        if b.owner == world.me:
+            continue
+        dist = t.dist_to(b.pos)
+        dh, da = dist.get(home), dist.get(away)
+        if dh is None or da is None or dh + da - straight > SPEAR_WIDTH:
+            continue
+        cand = (dh, t.key(b.pos), b)
+        best = cand if best is None or cand[:2] < best[:2] else best
+    if best is None:
+        return []
+    b = best[2]
+    return [Task("창", "W", b.pos, t.threat.get(b.pos, 0) + SPEAR_EXTRA, SPEAR_VALUE)]
 
 
 def line_cell(t: Turn, eng: Pos) -> Pos | None:
@@ -1424,6 +1475,11 @@ def hold_line() -> Node:
                   "W", line_tasks)
 
 
+def spear() -> Node:
+    return enable("창 과제: SPEAR_FROM~SPEAR_UNTIL턴 우리 본진 → 적 본진 직선 위의 가장 가까운 남의 건물에 전투병 한 덩어리",
+                  "W", spear_tasks)
+
+
 def eng_focus() -> Node:
     def on(t: Turn) -> None:
         t.eng_focus = True
@@ -1450,35 +1506,35 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
-        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(THREAT_EXTRA),
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
     ),
     phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), spear(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(THREAT_EXTRA),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
-        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), warriors(1),
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), spear(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
     ),
 )
 

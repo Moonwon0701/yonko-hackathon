@@ -45,6 +45,7 @@ M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 �
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -59,6 +60,7 @@ from agent.algorithms import (
     threat_map,
 )
 from agent import learned
+from agent.forecast import after_moves
 from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,
@@ -310,6 +312,38 @@ FLAG_GUARD = 2
 FLAG_GUARD_WEIGHT = 0.5
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
+# ---- 값 차이 교전 (moonwon/eval-tuning 9/30, 모두 기본 끔) ----
+# 전투병은 1:1로 상쇄되므로, 우리 값이 2이고 상대가 3이면 동수 교환마다 상대가 1자원씩 더 잃는다(공학관을 가진 쪽의 이득).
+# 동수 공격: 우리 값이 더 싸면 급습·러시의 필요 인원을 "위협 + 1~2"에서 "위협"(최소 1)으로 — 동수로 상쇄돼도 이득이다
+TRADE_TIE = 0
+# 소모전: 우리 값이 더 싸면 적 전투병이 TRADE_HUNT_MIN명 이상 선 칸마다 과제(필요 인원 = 그 칸 다음 턴 위협, 동수면 상쇄),
+# 가치 = TRADE_HUNT × 적 인원 × (상대 값 − 우리 값) / 우리 값 (0 = 끔)
+TRADE_HUNT = 0.0
+TRADE_HUNT_MIN = 2
+# ---- 한 턴 앞 예측 (moonwon/eval-tuning 9/30, 기본 끔) ----
+# 상대 시점으로 이 봇의 판단을 한 번 더 돌려 상대가 이번 턴 둘 수를 예측한다(상대 모델 = 우리 봇, 상대의 기억은 따로 둔다).
+# 위협 맵은 "적 전투병이 모두 이 칸으로 온다"는 최악 가정이라 깃발병이 자주 멈추고 필요 인원이 부풀었다.
+# FORECAST: 1 = 깃발병 안전 판단만, 2 = 모든 위협 계산에 min(최악, 예측 + FORECAST_SLACK)을 쓴다 (0 = 끔)
+FORECAST = 0
+FORECAST_SLACK = 1
+# 처치 과제를 적 깃발병의 지금 칸이 아니라 예측한 이번 턴 도착 칸에 낸다 (0 = 끔, FORECAST와 따로)
+FORECAST_KILL = 0
+# 직전 턴 판단이 이 시간(ms, 실제 실행 환경에서 잰 값)을 넘었으면 이번 턴은 예측하지 않는다(응답 제한 300 ms)
+FORECAST_SKIP_MS = 90.0
+_timing = {"last": 0.0}
+# ---- 상대 스타일 감지 (moonwon/eval-tuning 9/30, 기본 끔) ----
+# 서버 리플레이 80여 판에서 우리가 진 강팀(ACE·참새튀김기·페이커·모든상금은…·렛츠고·치명ㄷ)은 공통으로 전투병을 20~40칸에 넓게
+# 깔고, 깃발병은 3~6명이며 호위 없이 우리 건물 2칸 안에 오는 일이 드물었다(턴 비율 0.04~0.25). 이긴 상대는 대부분 0.5~0.9.
+# STYLE_FROM턴부터 STYLE_UNTIL턴까지 모은 지표로, STYLE_TURN턴 뒤 "적 전투병 칸 평균 ≥ STYLE_CELLS이고 호위 없는 접근 비율
+# ≤ STYLE_RAID"이면 넓게 까는 강팀으로 보고 STYLE_MULT(학습 층 상수 → 배수)를 곱한다 (STYLE = 0이면 끔)
+STYLE = 0
+STYLE_FROM, STYLE_TURN, STYLE_UNTIL = 5, 30, 60
+STYLE_CELLS = 19.0
+STYLE_RAID = 0.3
+STYLE_MULT: dict[str, float] = {}
+_style = {"turns": 0, "raid": 0, "cells": 0, "cell_turns": 0, "wide": False}
+_enemy_memory: dict[str, object] = {}  # 상대 시점 판단이 쓰는 턴 간 기억 (우리 기억과 섞지 않는다)
+_MEMORY_NAMES = ("_phase", "_depots_taken", "_last_owned", "_served", "_flag_goal")
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -350,6 +384,7 @@ class Turn:
         self.makers: dict[str, list[Maker]] = {"F": [], "W": []}
         self.extra_warriors = 0
         self.deadline: int | None = None  # 막판: 남은 턴 (이 안에 끝낼 수 없는 점령 짝은 배정하지 않는다)
+        self.pred: tuple[Counter, dict[Pos, Pos]] | None = None  # 한 턴 앞 예측 (FORECAST)
 
     def tasks(self, unit: str) -> list[Task]:
         """이번 국면이 켠 과제 만들기 함수로 `unit` 병종의 과제 목록을 만든다."""
@@ -374,10 +409,66 @@ Maker = Callable[[Turn], list[Task]]  # 과제 만들기 함수: 칠판을 읽�
 
 
 def decide(world: World) -> list[Action]:
+    start = time.perf_counter()
+    pred = None
+    if (FORECAST or FORECAST_KILL) and _timing["last"] <= FORECAST_SKIP_MS:
+        pred = predict_enemy(world)
     learned.apply(world, globals())  # 학습한 상황별 가중치 층 (agent/learned.py)
+    if STYLE and watch_style(world):
+        g = globals()
+        for name, mult in STYLE_MULT.items():
+            g[name] = int(round(g[name] * mult)) if isinstance(g[name], int) else g[name] * mult
     turn = Turn(world)
+    turn.pred = pred
     TURN_TREE.tick(turn)
+    _timing["last"] = (time.perf_counter() - start) * 1000
     return turn.actions
+
+
+def watch_style(world: World) -> bool:
+    """상대 스타일 지표를 이번 턴 상태로 갱신하고, 넓게 까는 강팀으로 보이는지 돌려준다(STYLE)."""
+    s = _style
+    if world.turn <= 1:
+        s.update(turns=0, raid=0, cells=0, cell_turns=0, wide=False)
+    me, enemy = world.me, world.enemy
+    if STYLE_FROM <= world.turn <= STYLE_UNTIL:
+        ew = world.units_of(enemy, "W")
+        ours = [b.pos for b in world.owned(me)]
+        s["turns"] += 1
+        if ours and any(min(manhattan(p, b) for b in ours) <= 2 and not any(manhattan(p, q) <= 1 for q, _ in ew)
+                        for p, _ in world.units_of(enemy, "F")):
+            s["raid"] += 1
+        if world.turn >= 20 and ew:
+            s["cells"] += len(ew)
+            s["cell_turns"] += 1
+        if world.turn >= STYLE_TURN and s["cell_turns"]:
+            s["wide"] = (s["cells"] / s["cell_turns"] >= STYLE_CELLS and s["raid"] / s["turns"] <= STYLE_RAID)
+    return s["wide"]
+
+
+def predict_enemy(world: World) -> tuple[Counter, dict[Pos, Pos]]:
+    """상대가 이번 턴 둘 수를 이 봇의 판단으로 예측: (이동 뒤 (병종, 칸) → 인원, 적 깃발병 출발 칸 → 도착 칸).
+    상대 시점 판단은 우리 턴 간 기억(국면·관성 등)을 건드리지 않도록 상대 몫의 기억으로 바꿔 끼운 채 돌린다."""
+    g = globals()
+    ours = {name: g[name] for name in _MEMORY_NAMES}
+    if world.turn <= 1 or not _enemy_memory:
+        _enemy_memory.update(_phase={"name": "EXPAND", "calm": 0}, _depots_taken=set(), _last_owned={},
+                             _served=set(), _flag_goal={})
+    g.update(_enemy_memory)
+    try:
+        view = replace(world, me=world.enemy)
+        learned.apply(view, g)
+        t = Turn(view)
+        TURN_TREE.tick(t)
+        actions = t.actions
+    finally:
+        _enemy_memory.update({name: g[name] for name in _MEMORY_NAMES})
+        g.update(ours)
+    flag_dst: dict[Pos, Pos] = {}
+    for a in actions:
+        if isinstance(a, Move) and a.kind == "F" and a.src not in flag_dst:
+            flag_dst[a.src] = a.dst
+    return after_moves(world, world.enemy, actions), flag_dst
 
 
 def read_situation(t: Turn) -> None:
@@ -394,6 +485,15 @@ def read_situation(t: Turn) -> None:
     t.enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
     t.enemy_warriors = world.units_of(enemy, "W")
     t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
+    t.flag_threat = t.threat
+    t.flag_dst = {}
+    if t.pred is not None:
+        moved, t.flag_dst = t.pred
+        if FORECAST:
+            blend = {p: min(v, moved[("W", p)] + FORECAST_SLACK) for p, v in t.threat.items()}
+            t.flag_threat = blend
+            if FORECAST >= 2:
+                t.threat = blend
     t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
     t.others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
     # 상대 깃발병이 있는 건물은 경합이라, 전투병이 뽑아 주기 전에는 깃발병 목표가 아니다
@@ -427,7 +527,7 @@ def reserve_capture_cost(t: Turn) -> None:
 
 def plan_warrior_tasks(t: Turn) -> None:
     """전투병 과제 목록(이번 국면이 켠 종류)과, 과제가 없는 전투병의 공통 목표."""
-    t.w_tasks = sorted(trade_weighted(t, t.tasks("W")), key=lambda task: t.key(task.pos))
+    t.w_tasks = sorted(trade_weighted(t, t.tasks("W") + hunt_tasks(t)), key=lambda task: t.key(task.pos))
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
     t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
@@ -607,7 +707,7 @@ def replan_flags(t: Turn) -> None:
 
 def move_flags(t: Turn) -> None:
     """깃발병 이동: 한 명씩 FLAG_TREE로 다음 칸을 정한다."""
-    threat, w_after = t.threat, t.w_after
+    threat, w_after = t.flag_threat, t.w_after
 
     def safe(pos: Pos) -> bool:
         # 전투병 수가 같으면 서로 상쇄되고 남은 전투병이 없어 깃발병은 살아남는다
@@ -774,6 +874,8 @@ def kill_tasks(t: Turn) -> list[Task]:
             if not any(dist.get(p, 99) <= KILL_REACH for p in ours):
                 continue
         bonus = t.values[b.id] if b else 0.0
+        if FORECAST_KILL and pos in t.flag_dst:  # 예측한 도착 칸에서 잡는다
+            pos = t.flag_dst[pos]
         tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
     if INTERCEPT_VALUE > 0:
         for b in intercept_targets(t).values():
@@ -810,6 +912,22 @@ def trade_weighted(t: Turn, tasks: list[Task]) -> list[Task]:
         return tasks
     factor = TRADE_BOOST if ours < theirs else 1 / TRADE_BOOST
     return [replace(task, value=task.value * factor) if task.kind in TRADE_KINDS else task for task in tasks]
+
+
+def cheaper(t: Turn) -> bool:
+    """우리 전투병 값이 상대보다 싼가 (공학관 차이)."""
+    return t.world.warrior_cost(t.world.me) < t.world.warrior_cost(t.world.enemy)
+
+
+def hunt_tasks(t: Turn) -> list[Task]:
+    """소모전(TRADE_HUNT > 0, 우리 값이 더 쌀 때): 적 전투병이 TRADE_HUNT_MIN명 이상 선 칸에 그 칸 다음 턴 위협만큼."""
+    if TRADE_HUNT <= 0 or not cheaper(t):
+        return []
+    world = t.world
+    ours, theirs = world.warrior_cost(world.me), world.warrior_cost(world.enemy)
+    gain = (theirs - ours) / ours
+    return [Task("소모전", "W", pos, max(n, t.threat.get(pos, 0)), TRADE_HUNT * n * gain)
+            for pos, n in t.enemy_warriors if n >= TRADE_HUNT_MIN]
 
 
 def escort_tasks(t: Turn) -> list[Task]:
@@ -922,6 +1040,8 @@ def attack_need(t: Turn, b: Building, extra: int) -> int:
     """상대 건물 `b`에 들어갈 전투병 수: 그 칸 위협 + `extra`. ATTACK_TIE가 켜져 있고 우리 깃발병이 ATTACK_TIE걸음 안에
     있으면 위협만큼(최소 1): 동수면 서로 상쇄되어 남은 전투병이 없으므로 따라 들어간 우리 깃발병이 살아남아 중립화한다."""
     threat = t.threat.get(b.pos, 0)
+    if TRADE_TIE and cheaper(t):
+        return max(1, threat)
     if ATTACK_TIE > 0:
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= ATTACK_TIE for p, _ in t.flags):

@@ -1,0 +1,12 @@
+{
+ "B0_역V2만(기준)": {"STATION_V2": true},
+ "K1a_양동 항상": {"STATION_V2": true, "DIVERSION_FROM": 24},
+ "K1_양동 조건부": {"STATION_V2": true, "DIVERSION_FROM": 24, "DIVERSION_COND": true},
+ "K2_암살 조건부(신호1.0)": {"STATION_V2": true, "ASSASSIN_COND": true},
+ "K2b_암살 조건부(신호1.5)": {"STATION_V2": true, "ASSASSIN_COND": true, "ASSASSIN_SIGNAL": 1.5},
+ "K3_20턴부터 최소3명": {"STATION_V2": true, "MIN_ORDER": 3},
+ "K4_역 V3": {"STATION_V2": true, "STATION_V3": true},
+ "K5_기동대": {"STATION_V2": true, "MOBILE": true},
+ "K6_혼합(전부)": {"STATION_V2": true, "STATION_V3": true, "DIVERSION_FROM": 24, "DIVERSION_COND": true, "ASSASSIN_COND": true, "ASSASSIN_SIGNAL": 1.5, "MIN_ORDER": 3, "MOBILE": true},
+ "K7_혼합(최소3명 제외)": {"STATION_V2": true, "STATION_V3": true, "DIVERSION_FROM": 24, "DIVERSION_COND": true, "ASSASSIN_COND": true, "ASSASSIN_SIGNAL": 1.5, "MOBILE": true}
+}

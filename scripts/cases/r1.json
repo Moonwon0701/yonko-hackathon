@@ -1,0 +1,17 @@
+{
+ "C0_baseline(현진복사)": {},
+ "C1_flex(1~5)": {"SQUAD_FLEX": true},
+ "C2_flex(2~5)": {"SQUAD_FLEX": true, "SQUAD_MIN": 2},
+ "C3_양동만": {"DIVERSION_FROM": 24},
+ "C4_flex+양동": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24},
+ "C5_관성만": {"WARRIOR_INERTIA": 1},
+ "C6_flex+양동+관성": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1},
+ "C7_flex+관성": {"SQUAD_FLEX": true, "WARRIOR_INERTIA": 1},
+ "C8_C6+비용/광장스킵": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "COST_BASE": 8.0, "PLAZA_SKIP_UNTIL": 40},
+ "C9_C6+대기후퇴": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "IDLE_RETREAT": true},
+ "C10_C6+가치V2": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "VALUES_V2": true},
+ "C11_C6+초반깃발4": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "EARLY_MAX_FLAGS": 4},
+ "C12_C6 양동20턴부터": {"SQUAD_FLEX": true, "DIVERSION_FROM": 20, "WARRIOR_INERTIA": 1},
+ "C13_C6 양동 THREAT제외": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "DIVERSION_IN_THREAT": false},
+ "C14_C6 양동+2명": {"SQUAD_FLEX": true, "DIVERSION_FROM": 24, "WARRIOR_INERTIA": 1, "DIVERSION_EXTRA": 2}
+}

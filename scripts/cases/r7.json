@@ -1,0 +1,5 @@
+{
+ "B0_역V2만(기준)": {"STATION_V2": true},
+ "A_양동조건부+기동대": {"STATION_V2": true, "DIVERSION_FROM": 24, "DIVERSION_COND": true, "MOBILE": true},
+ "B_양동항상+기동대+역V3": {"STATION_V2": true, "STATION_V3": true, "DIVERSION_FROM": 24, "MOBILE": true}
+}

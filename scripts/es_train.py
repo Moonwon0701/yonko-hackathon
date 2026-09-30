@@ -75,6 +75,17 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "early_guard": {  # experiments/learned_eg(= e30333c(074803e + 선제 수비) + 성혁 hunters efb71da 코드, 기동대 수정만 켬)
+        # 위에서 이어 학습. 주 상대 = 제출본 e30333c, 그다음 strong_wide와 선제 수비 전 봇 074803e. 나머지는 퇴보 방지용
+        "e30333c": ("git:e30333c", 4),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "074803e": ("git:074803e", 2),
+        "337ab49": ("git:337ab49", 1),
+        "hunters": ("git:efb71da", 1),
+        "26fa986": ("git:26fa986", 1),
+        "daa1888": ("git:daa1888", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
         "daa1888": ("git:daa1888", 4),
         "7941b88": ("git:7941b88", 2),

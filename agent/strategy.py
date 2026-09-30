@@ -300,6 +300,12 @@ ENG_BANK = 3
 # 전투병이 우리보다 많으면 적립하지 않는다(0 = 끔)
 HOSP_BANK = 0
 BANK_SAFE = 0
+# 같은 계열. 도서관 타이밍 점령: 우리에게 도서관이 없고 곧 얻으면(building_coming, 1·2·3 = ENG_BANK와 같은 턴 수) 다른 중립
+# 건물의 점령을 미뤄 도서관 할인(단계 비용 −1)을 받는다(0 = 끔). 할인은 점령 단계에 들어가는 시점의 소유권이라 도서관을 얻은
+# 다음 턴부터 붙는다. 미루는 건물: 중립이고, 적 깃발병이 LIB_SAFE걸음 안에 없고, 깃발병이 아직 건물 위에 없는 것(올라가
+# 있으면 자동으로 점령된다). 다음 턴 자원이 상한을 넘기면 아끼는 의미가 없어 미루지 않는다
+LIB_BANK = 0
+LIB_SAFE = 3
 # 수비 깃발(flag_guard_tasks): 적 깃발병이 FLAG_GUARD걸음 안에 온 우리 경제 건물 위에 우리 깃발병을 세운다(0 = 끔). 경합 규칙으로
 # 적 깃발병 혼자 빼앗기(9/29 22:00 빈 건물 30번)와 동수 상쇄 뒤 중립화(상쇄 패배 23번)를 막는다. 가치 = 건물 가치 × 이 배수.
 # 반경을 넓히면 깃발병이 점령을 못 하고 묶인다(4걸음: 20경기 30%). 규칙상 내 건물 위 내 깃발병이 전투로 죽으면 그 건물은 즉시
@@ -414,7 +420,8 @@ def plan_flags(t: Turn) -> None:
     t.targets, t.pulled = t.free_targets, set()
     t.f_tasks = t.tasks("F")
     t.flag_plan1 = assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline)
-    t.capturing_now = capturing(t.flag_plan1, t.dist_to)
+    t.lib_hold = library_hold(t)
+    t.capturing_now = [task for task in capturing(t.flag_plan1, t.dist_to) if task.pos not in t.lib_hold]
 
 
 def reserve_capture_cost(t: Turn) -> None:
@@ -488,17 +495,42 @@ def produce(t: Turn) -> None:
 def eng_coming(t: Turn) -> bool:
     """공학관을 곧 얻는가: ENG_BANK = 1이면 이번 턴 끝(깃발병이 1걸음 안이고 점령 1단계 남음), 2면 다음 턴 끝까지
     (2걸음 안이고 1단계 남음, 또는 1걸음 안이고 2단계 남음 = 이번 턴 중립화 → 다음 턴 점령)."""
+    return building_coming(t, "ENG", ENG_BANK)
+
+
+def building_coming(t: Turn, kind: str, horizon: int) -> bool:
+    """`kind` 건물을 `horizon`턴 안(1 = 이번 턴 끝)에 얻는가 (eng_coming의 일반형)."""
     for pos, task in t.flag_plan1:
-        if task.building is None or task.building.kind != "ENG":
+        if task.building is None or task.building.kind != kind:
             continue
         d = t.dist_to(task.pos).get(pos, 99)
         if d <= 1 and task.stages == 1:
             return True
-        if ENG_BANK >= 2 and ((d <= 2 and task.stages == 1) or (d <= 1 and task.stages == 2)):
+        if horizon >= 2 and ((d <= 2 and task.stages == 1) or (d <= 1 and task.stages == 2)):
             return True
-        if ENG_BANK >= 3 and ((d <= 3 and task.stages == 1) or (d <= 2 and task.stages == 2)):
+        if horizon >= 3 and ((d <= 3 and task.stages == 1) or (d <= 2 and task.stages == 2)):
             return True
     return False
+
+
+def library_hold(t: Turn) -> set[Pos]:
+    """LIB_BANK: 도서관을 얻을 때까지 점령을 미룰 건물 칸 (깃발병은 그 앞 칸에서 기다린다)."""
+    world, me = t.world, t.world.me
+    if not LIB_BANK or world.owned(me, "LIBRARY") or not building_coming(t, "LIBRARY", LIB_BANK):
+        return set()
+    income = BASE_INCOME + HALL_BONUS * len(world.owned(me, "HALL"))
+    if world.gold[me] + income > RESOURCE_CAP:
+        return set()
+    hold = set()
+    for pos, task in t.flag_plan1:
+        b = task.building
+        if b is None or b.kind == "LIBRARY" or b.owner is not None or task.stages == 0 or pos == task.pos:
+            continue
+        dist = t.dist_to(b.pos)
+        if any(dist.get(p, 99) <= LIB_SAFE for p in t.enemy_flags):
+            continue
+        hold.add(b.pos)
+    return hold
 
 
 def bank_unsafe(t: Turn) -> bool:
@@ -628,7 +660,7 @@ def move_flags(t: Turn) -> None:
     goals: dict[Pos, set[Pos]] = {}  # 이동 뒤 칸 → 그 칸 깃발병들의 목표 (다음 턴 FLAG_INERTIA)
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
-        hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
+        hold = (task.building.id in t.pulled and t.arrival[task.pos] > 1) or task.pos in t.lib_hold
         step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead)
         if step:
             f_steps[(pos, step)] += 1

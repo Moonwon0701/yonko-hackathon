@@ -54,6 +54,16 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "learned240": {  # 학습 봇(26fa986 = daa1888 + 240세대) 위에서 이어 학습. 주 상대 = 그 봇 자신, 그다음 가장 어려운 로컬
+        # 상대 strong_wide(26fa986 승점률 67%, 서버 강팀 스타일). 나머지(26fa986이 82~90%로 이김)는 퇴보 방지용
+        "26fa986": ("git:26fa986", 4),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "daa1888": ("git:daa1888", 2),
+        "7941b88": ("git:7941b88", 1),
+        "hyunjin": ("git:7b8b67e", 1),
+        "sunghyuk": ("git:73e2691", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
         "daa1888": ("git:daa1888", 4),
         "7941b88": ("git:7941b88", 2),

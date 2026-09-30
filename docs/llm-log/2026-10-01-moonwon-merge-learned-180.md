@@ -3,7 +3,7 @@
 - 날짜: 2026-10-01
 - 요청한 사람: 문원
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI
-- PR: (번호는 PR을 만든 뒤 채움) — 브랜치 `moonwon/merge-learned-180`, 테마 브랜치 `moonwon/eval-tuning` `074803e`에서 옮김
+- PR: #57 (브랜치 `moonwon/merge-learned-180`), 테마 브랜치 `moonwon/eval-tuning` `074803e`에서 옮김
 
 ## 프롬프트 (원문 그대로)
 

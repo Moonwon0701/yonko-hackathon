@@ -75,8 +75,8 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
-    "early_guard": {  # 선제 수비를 켠 봇(e30333c = 074803e + 선제 수비, experiments/learned_eg) 위에서 이어 학습.
-        # 주 상대 = 그 봇 자신, 그다음 strong_wide와 선제 수비 전 봇 074803e. 나머지는 퇴보 방지용
+    "early_guard": {  # experiments/learned_eg(= e30333c(074803e + 선제 수비) + 성혁 hunters efb71da 코드, 기동대 수정만 켬)
+        # 위에서 이어 학습. 주 상대 = 제출본 e30333c, 그다음 strong_wide와 선제 수비 전 봇 074803e. 나머지는 퇴보 방지용
         "e30333c": ("git:e30333c", 4),
         "strong_wide": ("opponents/strong_wide.py", 3),
         "074803e": ("git:074803e", 2),

@@ -100,6 +100,14 @@ DEPOT_VALUE = 3.5  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
 # 공학관: 전투병 값 3 → 2, 같은 자원으로 전투병 1.5배. 진 경기는 전투병(= 생산량) 차이로 벌어지므로
 # 0.5 → 2.0으로 올렸다(main 상대 400경기 약 61% — docs/benchmarks.md)
 FUNCTION_VALUE = {"LIBRARY": 1.0, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
+# 점수 가중치를 턴별로: 건물 가치의 추정 점수 쪽에 곱하는 수. SCORE_RAMP_START턴까지 SCORE_WEIGHT_EARLY, SCORE_RAMP_END턴부터
+# SCORE_WEIGHT_LATE, 그 사이는 직선으로. 초반엔 점수를 낮춰 학생회관·공학관 같은 기능 건물을 먼저 잡고, 점수는 160턴 순간에만
+# 세므로 후반엔 점수를 높인다. 둘 다 1.0이면 예전과 같다(= 074803e). 0.5 → 1.5: 새 시드 1,200판씩 대 074803e 51.6%,
+# 대 337ab49 53.5 → 59.5%, 대 strong_wide 76.3 → 80.5% (docs/benchmarks.md)
+SCORE_WEIGHT_EARLY = 0.5
+SCORE_WEIGHT_LATE = 1.5
+SCORE_RAMP_START = 20
+SCORE_RAMP_END = 120
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
@@ -1676,9 +1684,16 @@ def estimated_score(world: World, b: Building) -> float:
     return score
 
 
+def score_weight(turn: int) -> float:
+    """턴별 점수 가중치: SCORE_RAMP_START턴까지 SCORE_WEIGHT_EARLY → SCORE_RAMP_END턴부터 SCORE_WEIGHT_LATE (사이는 직선)."""
+    span = max(1, SCORE_RAMP_END - SCORE_RAMP_START)
+    ratio = min(1.0, max(0.0, (turn - SCORE_RAMP_START) / span))
+    return SCORE_WEIGHT_EARLY + (SCORE_WEIGHT_LATE - SCORE_WEIGHT_EARLY) * ratio
+
+
 def building_value(world: World, b: Building) -> float:
-    """건물 하나의 가치(점수 단위) = 추정 점수 + 기능 가치."""
-    score = estimated_score(world, b)
+    """건물 하나의 가치(점수 단위) = 추정 점수 × 턴별 점수 가중치 + 기능 가치."""
+    score = estimated_score(world, b) * score_weight(world.turn)
     step = world.turn // 5
     if b.kind == "HALL" and SH_HALL_DECAY:
         bonus = max(1.8, 3.6 - 0.2 * step) * HALL_VALUE_PER_TURN / HALL_VALUE_REF

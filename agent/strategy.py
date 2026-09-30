@@ -187,6 +187,11 @@ STAGE_GAP = 1
 INTERCEPT_IDLE = 0
 INTERCEPT_VALUE = 0.0
 INTERCEPT_RADIUS = 6
+# 요격 인원에 깃발병 곁 적 전투병(호위)도 센다: max(그 칸 위협, 호위) + 1 (0 = 예전처럼 그 칸 위협 + 1)
+# 10/1 재시험(074803e 위, 새 시드 40000번대 300판, 대 074803e / 337ab49(기준 58.0) / strong_wide(기준 74.0)): 요격 1.0 43.7 / 50.3 /
+# 75.3%, + 호위 셈 37.0 / 47.7 / 76.7%, 공통 목표 요격 44.7 / 49.3 / 71.7%, FORECAST_KILL 43.0 / 53.0 / 76.0%. 뒤쫓기를 줄이면 적 깃발병
+# 처치가 줄어 더 손해다 — 리플레이의 뒤쫓기 문제는 선제 수비(EARLY_GUARD)로 먼저 건물에 서는 쪽이 통했다. 모두 끈 채 남김
+INTERCEPT_ESCORT = 0
 # 비용 교환: 우리 전투병 값이 상대보다 싸면 공격 과제(TRADE_KINDS) 가치 × TRADE_BOOST, 비싸면 ÷ TRADE_BOOST (1 = 끔).
 # 교환은 1:1이지만 값이 2 대 3이면 같은 자원으로 1.5배를 만든다
 TRADE_BOOST = 1.0
@@ -310,6 +315,21 @@ BANK_SAFE = 0
 # 65.2 · 68.2 / 63.9**(풀 80 → 88.1 · 81.6%), 반경 3 × 0.5 62.0 / 62.3. 반경 2 × 0.5는 제출본(7941b88) 71.2 / 70.5%, 현진 78.5 / 82.0%
 FLAG_GUARD = 2
 FLAG_GUARD_WEIGHT = 0.5
+# 수비 깃발 대상 확대 (10/1 리플레이 분석): 경제 건물 말고도 추정 점수가 FLAG_GUARD_SCORE 이상인 우리 건물에 수비 깃발을 세운다
+# (0 = 끔). 9/30 20:00 탈락도 락이다전에서 4점 역을 9번 잃었다 — 깃발병이 역과 옆 칸을 오가며 비울 때마다 적이 걸어 들어왔다.
+# 074803e 위 직접 대결 300판(새 시드 40000번대): 점수 3 이상 대 074803e 44.0 · 337ab49 52.3(기준 58.0) · strong_wide 69.7%(74.0),
+# 2 이상 36.7 · 47.7 · 67.0% — 깃발병이 고점 건물에 묶여 점령을 못 한다. 끈 채 남김
+FLAG_GUARD_SCORE = 0.0
+# 선제 수비 (10/1 분석, 켬): 지키기는 적 깃발병이 GUARD_RADIUS걸음 안에 와야 시작해, 멀리서 오는 소규모 기습조(깃발병 1 + 전투병 2)에게
+# 후방 빈 건물을 내줬다(ACE전 학생회관·공학관·도서관). 적 깃발병이 EARLY_GUARD걸음 안이고 우리 전투병이 그 깃발병보다
+# EARLY_SLACK턴 이상 먼저 닿지 못하는 우리 건물에 "선제 수비" 과제를 미리 낸다(0 = 끔). 필요 인원 = max(그 칸 위협,
+# 깃발병 곁 적 전투병) + 1, 가치 = 건물 가치 × EARLY_GUARD_WEIGHT
+# 074803e 위 직접 대결(시간 배율 3, 몰수 0): 새 시드 40000번대 300판 → 고르지 않은 41000번대 400판. 6걸음 여유 2: 대 074803e
+# 55.3 → 53.7%, 대 337ab49 58.0 → 62.0 / 56.0 → 60.5%, 대 strong_wide 74.0 → 77.7 / 78.5 → 79.2%. 여유 1은 +2~5%p, 여유 0은 둘째
+# 묶음에서 효과 없음, 8걸음은 6걸음과 비슷. 최대 응답 17 ms(기준 15~22)
+EARLY_GUARD = 6
+EARLY_SLACK = 2
+EARLY_GUARD_WEIGHT = 1.0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
 # ---- 값 차이 교전 (moonwon/eval-tuning 9/30, 모두 기본 끔) ----
@@ -1001,7 +1021,7 @@ def flag_guard_tasks(t: Turn) -> list[Task]:
         return []
     tasks = []
     for b in t.world.owned(t.world.me):
-        if b.kind not in ECON_KINDS:
+        if b.kind not in ECON_KINDS and not (FLAG_GUARD_SCORE and estimated_score(t.world, b) >= FLAG_GUARD_SCORE):
             continue
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= FLAG_GUARD for p in t.enemy_flags):
@@ -1030,10 +1050,18 @@ def kill_tasks(t: Turn) -> list[Task]:
             continue
         tasks.append(Task("처치", "W", pos, need, KILL_VALUE * n + bonus))
     if INTERCEPT_VALUE > 0:
-        for b in intercept_targets(t).values():
+        for flag, b in intercept_targets(t).items():
             if b.owner == t.world.me and b.pos not in t.enemy_flags:
-                tasks.append(Task("요격", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * INTERCEPT_VALUE))
+                need = raid_need(t, flag, b) if INTERCEPT_ESCORT else t.threat.get(b.pos, 0) + 1
+                tasks.append(Task("요격", "W", b.pos, need, t.values[b.id] * INTERCEPT_VALUE))
     return tasks
+
+
+def raid_need(t: Turn, flag: Pos, b: Building) -> int:
+    """적 깃발병 `flag`가 노리는 우리 건물 `b`를 지킬 전투병: max(그 칸 다음 턴 위협, 깃발병 칸과 이웃의 적 전투병) + 1.
+    그 칸 위협만 세면 아직 멀리 있는 기습조(깃발병 + 호위)에 한 명만 보내, 도착해서 상쇄로 지고 건물을 내준다."""
+    escort = sum(n for p, n in t.enemy_warriors if manhattan(p, flag) <= 1)
+    return max(t.threat.get(b.pos, 0), escort) + 1
 
 
 def intercept_targets(t: Turn) -> dict[Pos, Building]:
@@ -1122,7 +1150,32 @@ def escort_size(turn: int) -> int:
 def guard_tasks(t: Turn, weight: float) -> list[Task]:
     """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다(가치 × weight). 올라오는 적 깃발병을
     그 칸에서 잡는다."""
-    return [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
+    tasks = [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
+    return tasks + early_guard_tasks(t, weight)
+
+
+def early_guard_tasks(t: Turn, weight: float) -> list[Task]:
+    """선제 수비(EARLY_GUARD > 0): 적 깃발병이 GUARD_RADIUS보다 멀고 EARLY_GUARD걸음 안인 우리 건물 중, 우리 전투병이
+    가장 가까운 적 깃발병보다 EARLY_SLACK턴 이상 먼저 닿지 못하는 곳에 전투병을 미리 세운다(가치 × weight × EARLY_GUARD_WEIGHT).
+    지키기(적 깃발병 GUARD_RADIUS 안)가 이미 있는 건물은 뺀다."""
+    if EARLY_GUARD <= 0 or not t.enemy_flags:
+        return []
+    world = t.world
+    guarded = {b.id for b, _ in t.pressured}
+    ours = [p for p, _ in world.units_of(world.me, "W")]
+    tasks = []
+    for b in world.owned(world.me):
+        if b.id in guarded:
+            continue
+        dist = t.dist_to(b.pos)
+        near = min(((dist[p], t.key(p), p) for p in t.enemy_flags if p in dist), default=None)
+        if near is None or near[0] > EARLY_GUARD:
+            continue
+        mine = min((dist[p] for p in ours if p in dist), default=99)
+        if mine + EARLY_SLACK <= near[0]:  # 우리가 넉넉히 먼저 닿는다 → 아직 과제로 묶지 않는다
+            continue
+        tasks.append(Task("선제 수비", "W", b.pos, raid_need(t, near[2], b), t.values[b.id] * weight * EARLY_GUARD_WEIGHT))
+    return tasks
 
 
 def defend_need(t: Turn, b: Building) -> int:

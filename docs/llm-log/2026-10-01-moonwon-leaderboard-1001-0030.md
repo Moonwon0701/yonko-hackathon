@@ -3,7 +3,7 @@
 - 날짜: 2026-10-01
 - 요청한 사람: 문원
 - 모델: Claude Opus 5.5 (`claude-opus-5-5`), Claude Code CLI (Claude in Chrome 확장으로 대회 사이트 조회)
-- PR: (브랜치 `moonwon/leaderboard-0930-22`)
+- PR: #58 (브랜치 `moonwon/leaderboard-0930-22`)
 
 ## 프롬프트 (원문 그대로)
 

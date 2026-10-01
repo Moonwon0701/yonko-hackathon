@@ -487,6 +487,13 @@ HALL_WATCH_WEIGHT = 1.0
 # 200판: ×2·5명 대 ee4ea4b 67.2 / strong_wide 85.5%, ×3·15명 68.8 / 87.0% (기준 72.2 / 81.8) — 엇갈려 끈 채 남김
 RAID_ENG_BOOST = 1.0
 RAID_ENG_SURPLUS = 0
+# 막판 저격: 점수로 끝난 경기에서 140 → 160턴 점수차가 ±10 넘게 바뀐 판이 많고, 진 판 120턴 깃발병 3.2명 대 상대 4.8명.
+# 마지막 SNIPE_TURNS턴은 국면은 그대로(전투병 운용 유지) 두고 깃발병 과제만 "막판 점령"(160턴 전에 끝낼 수 있는 짝만,
+# 상대 건물은 중립화 한 단계 × 점수 2)으로 바꾼다(0 = 끔). ENDGAME_TURNS가 나빴던 원인(전투병이 우리 건물 전체로 흩어짐)을
+# 피하려고 전투병은 건드리지 않는다. 깃발병 상한은 160 − SNIPE_TURNS − SNIPE_LEAD턴부터 160 − 3턴까지 + SNIPE_FLAGS
+SNIPE_TURNS = 0
+SNIPE_FLAGS = 0
+SNIPE_LEAD = 10
 # 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
 # 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
 MOBILE = 1
@@ -770,7 +777,9 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    cap_f = MAX_FLAGS + (SNIPE_FLAGS if SNIPE_TURNS and TOTAL_TURNS - SNIPE_TURNS - SNIPE_LEAD <= world.turn
+                         <= TOTAL_TURNS - 3 else 0)
+    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, cap_f) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -2199,6 +2208,15 @@ def final_capture(danger: float) -> Node:
     return Act(f"막판 점령 과제: 160턴 전에 끝낼 수 있는 건물만, 최종 점수로 (적 전투병이 닿는 건물 ×{danger:g})", on)
 
 
+def final_snipe(t: Turn) -> None:
+    """막판 저격(SNIPE_TURNS > 0): 마지막 SNIPE_TURNS턴은 국면이 고른 깃발병 과제를 막판 점령 + 깃발병 지키기로 바꾼다.
+    전투병 과제는 국면 그대로."""
+    if not SNIPE_TURNS or t.world.turn <= TOTAL_TURNS - SNIPE_TURNS or t.deadline is not None:
+        return
+    t.deadline = TOTAL_TURNS - t.world.turn
+    t.makers["F"] = [lambda t: final_capture_tasks(t, THREAT_DANGER), flag_guard_tasks]
+
+
 def final_guard() -> Node:
     return enable(f"막판 수비 과제: 남은 턴 안에 적 깃발병이 닿는 우리 건물 (점수 ×{FINAL_GUARD_WEIGHT:g})", "W", final_guard_tasks)
 
@@ -2266,6 +2284,7 @@ TURN_TREE = Sequence(
     "한 턴",
     Act("상황 읽기 (위협 맵·건물 가치·국면 조건)", read_situation),
     PHASE_TREE,
+    Act("막판 저격 (SNIPE_TURNS > 0): 마지막 턴 깃발병만 최종 점수 기준으로", final_snipe),
     Sequence(
         "깃발병 1차: 이번 턴 점령할 건물",
         Act("지금 있는 깃발병을 점령 과제에 배정", plan_flags),

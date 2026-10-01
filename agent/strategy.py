@@ -447,6 +447,26 @@ ORDER_EXEMPT = {"양동", "암살"}
 STATION_V3 = 0
 STATION_LINK_GAIN = 0.5
 STATION_DEFENSE = 0.6
+# 역 차단 (10/1 10:00 리더보드 분석, 기본 끔): 역 가치는 우리 순간이동망만 셌고 상대 망을 끊는 값은 없었다. 그 회차 160턴까지 간 진
+# 경기는 상대가 역 2개 이상(턴당 5명 순간이동)을 가진 턴이 116~153턴이었고(이긴 경기는 대부분 80턴 아래), 생산·지출은 같은데 상대
+# 전투병이 중앙 32~35 : 우리 18~19로 앞섰다. STATION_DENY > 0 = 상대 역이 n개(≥ 2)일 때 상대 역 가치에 STATION_DENY / (n − 1)을
+# 더한다(n − 1개를 빼앗아야 망이 끊긴다). STATION_DENY_PRE > 0 = 상대 역이 1개일 때 그 역과 이어질 중립 역에 STATION_DENY ×
+# 이 값(상대 망이 생기기 전에 먼저 차지). STATION_RAID = 1 = 상대 역이 2개 이상이면 상대 역도 급습(전투병) 대상, 2 = 상대 역이
+# 딱 2개일 때만(하나를 빼앗으면 망이 끊길 때)
+STATION_DENY = 0.0
+STATION_DENY_PRE = 0.0
+STATION_RAID = 0
+# 포위된 깃발병 (10/1 10:00 리더보드 분석, 기본 끔): 진 경기는 깃발병이 판당 12.9명 죽었고(이긴 경기 5.5) 그중 11.7명이 위협(1걸음 안
+# 적 전투병)이 우리 전투병보다 많은 칸으로 걸어 들어가 죽었다 — 지금 칸도 이웃도 위험할 때의 "위험해도 목표 쪽으로" 가지. 리더보드
+# 두 회차 진 15판에서 이 강행 279번 중 그 칸이 실제로 죽는 칸이었던 것이 181번(65%), 같은 순간 열세(위협 − 우리 전투병)가 가장 작은
+# 이웃이었다면 131번(47%). FLAG_ESCAPE = 1 = 포위되면 열세가 가장 작은 이웃으로(같으면 목표에 가까운 쪽), 2 = 제자리도 후보, 0 = 끔.
+# ee4ea4b 위 직접 대결(새 시드 63000·64000번대 600판씩): 1은 대 ee4ea4b 64.4 · 68.0%, 337ab49 66.8 → 77.0 · 67.8 → 75.3%,
+# strong_wide 82.5 → 85.7 · 79.2 → 85.7%, 현진 7b8b67e 91.8 → 94.5% — 쓴 상대 모두 +. 2는 대 ee4ea4b 54.1%. 로컬 80판에서 우리
+# 깃발병 생산 9.8 → 8.8명, 상대 9.8 → 11.2명 (docs/benchmarks.md "진 경기 분석 스위치")
+FLAG_ESCAPE = 1
+# 목표 쪽 칸보다 열세가 이만큼 이상 작은 칸이 있을 때만 피한다(0 = 조금이라도 작으면 피함). 시드 65000번대 400판: 0 · 1(열세가 정수라
+# 0과 같음) 대 ee4ea4b 68.6%, 2 64.8%, 3 60.9%
+FLAG_ESCAPE_GAIN = 0
 # 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
 # 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
 MOBILE = 1
@@ -907,6 +927,10 @@ def move_flags(t: Turn) -> None:
         # 전투병 수가 같으면 서로 상쇄되고 남은 전투병이 없어 깃발병은 살아남는다
         return threat.get(pos, 0) <= w_after[pos]
 
+    def margin(pos: Pos) -> int:
+        """이 칸의 열세: 다음 턴 올 수 있는 적 전투병 − 이동 뒤 우리 전투병 (FLAG_ESCAPE)."""
+        return threat.get(pos, 0) - w_after[pos]
+
     def ahead(pos: Pos) -> bool:
         """나아갈 칸: 안전하고, FLAG_LOOKAHEAD면 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병(다음 턴 포위 대비)."""
         if not safe(pos):
@@ -923,7 +947,7 @@ def move_flags(t: Turn) -> None:
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
-        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead)
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead, margin)
         if step:
             f_steps[(pos, step)] += 1
         goals.setdefault(step or pos, set()).add(task.pos)
@@ -1708,8 +1732,11 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     world = t.world
     if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
         return []
+    their_stations = len(world.owned(world.enemy, "STATION"))
+    station_raid = their_stations == 2 if STATION_RAID == 2 else (STATION_RAID and their_stations >= 2)
+    kinds = RAID_KINDS | ({"STATION"} if station_raid else set())
     return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight)
-            for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]
+            for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in kinds]
 
 
 # ------------------------------------------------------------------ 깃발병
@@ -1756,9 +1783,11 @@ class FlagMove:
     def __init__(
         self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
         safe: Callable[[Pos], bool], hold: bool, ahead: Callable[[Pos], bool] | None = None,
+        margin: Callable[[Pos], int] | None = None,
     ) -> None:
         self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
         self.ahead = ahead or safe  # 목표 쪽으로 나아갈 칸의 판단 (기본 = 안전)
+        self.margin = margin  # 칸의 열세 (FLAG_ESCAPE)
         self.here = dist.get(pos)
         neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
         self.neighbors = [n for n in neighbors if n in dist]
@@ -1776,6 +1805,20 @@ class FlagMove:
         self.step = n
         return True
 
+    def escape(self) -> bool:
+        """FLAG_ESCAPE: 포위됐을 때 열세가 가장 작은 칸으로 (같으면 목표에 가까운 칸, 2면 제자리도 후보). 제자리를 고르면 step = None."""
+        if not FLAG_ESCAPE or self.margin is None:
+            return False
+        cands = [n for n in self.neighbors if self.enterable(n)] + ([self.pos] if FLAG_ESCAPE == 2 else [])
+        if not cands:
+            return False
+        best = min(cands, key=lambda n: (self.margin(n), self.dist[n]))
+        forward = next((n for n in self.closer if self.enterable(n)), None)
+        if forward is not None and self.margin(forward) - self.margin(best) < FLAG_ESCAPE_GAIN:
+            best = forward  # 목표 쪽 칸보다 열세가 FLAG_ESCAPE_GAIN 이상 줄지 않으면 그대로 나아간다
+        self.step = None if best == self.pos else best
+        return True
+
 
 def flag_step(
     pos: Pos,
@@ -1785,13 +1828,14 @@ def flag_step(
     safe: Callable[[Pos], bool],
     hold: bool,
     ahead: Callable[[Pos], bool] | None = None,
+    margin: Callable[[Pos], int] | None = None,
 ) -> Pos | None:
     """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
     피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
     """
-    m = FlagMove(pos, goal, dist, order, safe, hold, ahead)
+    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, margin)
     FLAG_TREE.tick(m)
     return m.step
 
@@ -1941,7 +1985,21 @@ def building_value(world: World, b: Building) -> float:
         bonus = HOSPITAL_ISOLATED
     else:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
+    if b.kind == "STATION" and STATION_DENY > 0:
+        bonus += station_deny(world, b)
     return score + bonus
+
+
+def station_deny(world: World, b: Building) -> float:
+    """역 차단(STATION_DENY): 상대 순간이동망(역 2개 이상)을 끊는 가치. 상대 역이 n개면 그 역마다 STATION_DENY / (n − 1),
+    상대 역이 1개면 그 역과 STATION_MIN_LINK걸음 이상 떨어진 중립 역에 STATION_DENY × STATION_DENY_PRE."""
+    theirs = [s for s in world.owned(world.enemy, "STATION")]
+    if b.owner == world.enemy and len(theirs) >= 2:
+        return STATION_DENY / (len(theirs) - 1)
+    if (b.owner is None and STATION_DENY_PRE > 0 and len(theirs) == 1
+            and manhattan(b.pos, theirs[0].pos) >= STATION_MIN_LINK):
+        return STATION_DENY * STATION_DENY_PRE
+    return 0.0
 
 
 def station_value(world: World, b: Building) -> float:
@@ -2208,6 +2266,7 @@ FLAG_TREE = Selector(
     Sequence("대기", Condition("지금 칸이 안전", lambda m: m.safe(m.pos)), Act("제자리", lambda m: None)),
     Act("가장 목표에 가까운 안전한 이웃으로 피하기", lambda m: m.go(min(
         (n for n in m.neighbors if m.safe(n)), key=lambda n: m.dist[n], default=None))),
+    Act("포위되면 열세가 가장 작은 칸으로 (FLAG_ESCAPE)", lambda m: m.escape()),
     Act("위험해도 목표 쪽으로", lambda m: m.go(
         m.closer[0] if m.closer and m.enterable(m.closer[0]) else None)),
     Act("제자리", lambda m: None),

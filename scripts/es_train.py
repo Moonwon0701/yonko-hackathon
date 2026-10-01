@@ -75,6 +75,16 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "flag_escape": {  # experiments/learned_fe(= 0a15a9e: ee4ea4b + 포위된 깃발병 FLAG_ESCAPE) 위에서 4차 180세대 W부터 이어 학습.
+        # 주 상대 = 그 봇 자신, 그다음 제출본 ee4ea4b와 strong_wide. 나머지는 퇴보 방지용
+        "0a15a9e": ("git:0a15a9e", 4),
+        "ee4ea4b": ("git:ee4ea4b", 3),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "337ab49": ("git:337ab49", 1),
+        "hunters": ("git:efb71da", 1),
+        "26fa986": ("git:26fa986", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "early_guard": {  # experiments/learned_eg(= e30333c(074803e + 선제 수비) + 성혁 hunters efb71da 코드, 기동대 수정만 켬)
         # 위에서 이어 학습. 주 상대 = 제출본 e30333c, 그다음 strong_wide와 선제 수비 전 봇 074803e. 나머지는 퇴보 방지용
         "e30333c": ("git:e30333c", 4),

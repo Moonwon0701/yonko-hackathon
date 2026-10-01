@@ -216,6 +216,11 @@ RETAKE_KINDS = {"ENG"}
 # 구조 요청 (hyunjin/defense-econ e49947f에서 옮김, 기본 끔): 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "그 칸 위협 + 1"명
 # 과제(가치 RESCUE_VALUE × 깃발병 수). 현진 측정(현진 봇 위, 포위 탈출과 함께): daa1888 상대 63 · 60%, 구조만 1.0 57 · 63%
 RESCUE_VALUE = 0.0
+# 자리 지키기 (10/1 오후 분석, 기본 끔): 배정은 과제마다 가장 가까운 전투병을 고르므로, 우리 건물 위에서 지키던 전투병이 바로 옆 더 비싼
+# 수비 과제로 옮겨 가고 원래 자리는 더 먼 전투병이 맡아 한 턴 빈다. 10/1 10:00 Team 24전 91→92턴 도서관 (0,7)이 이렇게 비어 혼자 온 적
+# 깃발병에게 넘어갔다(2칸 안 전투병 13:0). HOLD_POST = 1 = POST_KINDS 과제 칸에 이미 선 전투병을 그 과제에 먼저 배정한다(비싼 과제부터)
+HOLD_POST = 0
+POST_KINDS = {"지키기", "몰아내기", "선제 수비", "전선", "막판 수비", "상주", "기동대"}
 # 공학관 열세 국면: 우리 전투병 값 > 상대 값이면 ENG_DEFICIT 가지. 전투병은 1:1 상쇄라 이때 흩어진 교전은 1.5배 손해이므로
 # 초소·전선·급습(학생회관)·러시를 빼고, 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명(가치 DEFICIT_VALUE),
 # 공학관 점령 가치 × DEFICIT_CAPTURE. 공학관 할인은 중복되지 않으므로(최소 2) 어느 쪽 공학관이든 하나면 된다.
@@ -1887,6 +1892,23 @@ def assign_warriors(
     remaining = list(tasks)
     opened: list[str] = []  # 연 과제 종류 (TASK_LIMIT)
     main_goals: list[Pos] = []  # 연 과제 중 깃발병 돕기가 아닌 것의 칸 (TASK_LIMIT 합류 목표)
+    if HOLD_POST:  # 수비 과제 칸에 이미 선 전투병은 그 과제에 먼저 (비싼 과제부터)
+        here = {c[0]: c for c in cells}
+        for task in sorted(remaining, key=lambda task: -task.value):
+            cell = here.get(task.pos)
+            if task.kind not in POST_KINDS or cell is None or cell[1] <= 0:
+                continue
+            take = min(cell[1], task.need)
+            plan += [(task.pos, task.pos)] * take
+            cell[1] -= take
+            remaining.remove(task)
+            if take < task.need:
+                remaining.append(replace(task, need=task.need - take))
+            else:
+                arrival[task.pos] = 0
+                opened.append(task.kind)
+                main_goals.append(task.pos)
+        cells = [c for c in cells if c[1] > 0]
     while remaining and cells:
         best: tuple[float, Task, list[tuple[int, int, int]]] | None = None
         full = TASK_LIMIT and sum(1 for k in opened if k not in FLAG_SUPPORT) >= TASK_LIMIT

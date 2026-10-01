@@ -210,6 +210,9 @@ RETAKE_VALUE = 8.0
 RETAKE_EXTRA = 1
 RETAKE_MEMORY = 20
 RETAKE_CAPTURE = 2.0
+# 탈환 대상 종류 (10/1 오후). 진 경기는 중앙(광장·방송국·보급소·서울역)을 내줘서 졌는데 탈환은 공학관만 본다. 중앙을 넣으면 잃은 중앙
+# 건물에도 전투병이 되돌아간다. 기본 = 공학관만(예전 동작)
+RETAKE_KINDS = {"ENG"}
 # 공학관 열세 국면: 우리 전투병 값 > 상대 값이면 ENG_DEFICIT 가지. 전투병은 1:1 상쇄라 이때 흩어진 교전은 1.5배 손해이므로
 # 초소·전선·급습(학생회관)·러시를 빼고, 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명(가치 DEFICIT_VALUE),
 # 공학관 점령 가치 × DEFICIT_CAPTURE. 공학관 할인은 중복되지 않으므로(최소 2) 어느 쪽 공학관이든 하나면 된다.
@@ -1669,9 +1672,10 @@ def hunters_step(t: Turn, pos: Pos, n: int) -> Pos:
 
 
 def recently_lost(t: Turn, b: Building) -> bool:
-    """우리 것이 아닌 공학관 `b`를 최근 RETAKE_MEMORY턴 안에 우리가 가지고 있었는가."""
+    """우리 것이 아닌 건물 `b`(RETAKE_KINDS, 기본 공학관)를 최근 RETAKE_MEMORY턴 안에 우리가 가지고 있었는가."""
     last = _last_owned.get(b.id)
-    return b.kind == "ENG" and b.owner != t.world.me and last is not None and t.world.turn - last <= RETAKE_MEMORY
+    return (b.kind in RETAKE_KINDS and b.owner != t.world.me and last is not None
+            and t.world.turn - last <= RETAKE_MEMORY)
 
 
 def retake_tasks(t: Turn) -> list[Task]:

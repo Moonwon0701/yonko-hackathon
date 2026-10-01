@@ -27,7 +27,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REPLAYS = ROOT / "data" / "server-replays"
 ROUNDS = ("2026-09-27_leaderboard", "2026-09-28_leaderboard_10", "2026-09-28_leaderboard_22",
-          "2026-09-29_leaderboard_10", "2026-09-29_leaderboard_22", "2026-09-30_leaderboard_10")
+          "2026-09-29_leaderboard_10", "2026-09-29_leaderboard_22", "2026-09-30_leaderboard_10",
+          "2026-10-01_leaderboard_0030", "2026-10-01_leaderboard_10")
 CHECKPOINTS = (10, 20, 30, 50, 80)
 SHORT_GAME = 50  # 이 턴 안에 끝난 경기는 --groups 평균에서 뺀다 (운용을 볼 턴이 짧고, 약팀 일방전이다)
 SHORT = {"PLAZA": "광", "HALL": "학", "LIBRARY": "도", "ENG": "공", "HOSPITAL": "병",

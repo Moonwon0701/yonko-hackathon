@@ -37,10 +37,15 @@ M3 — 국면 선택 (위층). 국면 = 이번 턴 과제 목록을 만드는 �
   적이 전투병을 먼저 모아 두고 깃발병을 나중에 들이는 경우를 막는다(9/28 리더보드 패배 분석).
 - 별동대 과제(현진 테마 브랜치에서 옮김): 위험한 목표(상대 소유이거나 적 전투병이 닿는 건물)로 가는 깃발병 1명
   (SECOND_SQUAD_TURN부터 2명)의 다음 칸에 전투병 SQUAD_SIZE명을 먼저 보내, 가는 길에서도 깃발병과 함께 움직인다.
+
+학습한 상황별 가중치 층(agent/learned.py): decide 첫 줄에서 이 파일의 상수 34개(과제 가치·생산 인원·성혁 기능 값)를 매 턴
+"기준값 × exp(W · 상황 특징 8개)"로 바꾼다. 아래 상수들은 그 기준값이다(= moonwon/unit-ops daa1888). W는 진화 전략으로
+찾았다(docs/benchmarks.md "학습 (진화 전략)"). learned.W를 비우면 daa1888과 똑같이 움직인다.
 """
 
 from __future__ import annotations
 
+import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -54,6 +59,8 @@ from agent.algorithms import (
     step_along,
     threat_map,
 )
+from agent import learned
+from agent.forecast import after_moves
 from agent.bt import Act, Condition, Latch, Node, Selector, Sequence
 from agent.world import (
     BASE_INCOME,
@@ -89,10 +96,10 @@ CENTER_KINDS = {"WATCH", "DEPOT"}
 
 # 기능 가치 (점수 단위)
 HALL_VALUE_PER_TURN = 0.02  # 학생회관: 남은 턴 × 이 값 (초반일수록 크다)
-DEPOT_VALUE = 2.0  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
+DEPOT_VALUE = 3.5  # 보급소: 최초 점령 +15 자원, 팀별 건물당 1회
 # 공학관: 전투병 값 3 → 2, 같은 자원으로 전투병 1.5배. 진 경기는 전투병(= 생산량) 차이로 벌어지므로
 # 0.5 → 2.0으로 올렸다(main 상대 400경기 약 61% — docs/benchmarks.md)
-FUNCTION_VALUE = {"LIBRARY": 0.5, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
+FUNCTION_VALUE = {"LIBRARY": 1.0, "ENG": 2.0, "HOSPITAL": 0.5, "STATION": 0.3, "WATCH": 0.3}
 
 ETA_OFFSET = 2  # 효용 분모에 더하는 값. 클수록 거리보다 건물 가치를 중시한다
 KILL_VALUE = 1.0  # 적 깃발병 한 명 제거의 가치 (점수 단위)
@@ -180,6 +187,11 @@ STAGE_GAP = 1
 INTERCEPT_IDLE = 0
 INTERCEPT_VALUE = 0.0
 INTERCEPT_RADIUS = 6
+# 요격 인원에 깃발병 곁 적 전투병(호위)도 센다: max(그 칸 위협, 호위) + 1 (0 = 예전처럼 그 칸 위협 + 1)
+# 10/1 재시험(074803e 위, 새 시드 40000번대 300판, 대 074803e / 337ab49(기준 58.0) / strong_wide(기준 74.0)): 요격 1.0 43.7 / 50.3 /
+# 75.3%, + 호위 셈 37.0 / 47.7 / 76.7%, 공통 목표 요격 44.7 / 49.3 / 71.7%, FORECAST_KILL 43.0 / 53.0 / 76.0%. 뒤쫓기를 줄이면 적 깃발병
+# 처치가 줄어 더 손해다 — 리플레이의 뒤쫓기 문제는 선제 수비(EARLY_GUARD)로 먼저 건물에 서는 쪽이 통했다. 모두 끈 채 남김
+INTERCEPT_ESCORT = 0
 # 비용 교환: 우리 전투병 값이 상대보다 싸면 공격 과제(TRADE_KINDS) 가치 × TRADE_BOOST, 비싸면 ÷ TRADE_BOOST (1 = 끔).
 # 교환은 1:1이지만 값이 2 대 3이면 같은 자원으로 1.5배를 만든다
 TRADE_BOOST = 1.0
@@ -209,30 +221,6 @@ ENG_DEFICIT = 0
 # +3.8·+1.0%p. 강습 흉내 봇 상대는 76.8 → 75.9%로 그대로 — 강습을 막는 것이 아니라 초반 공학관 수비가 두꺼워진 효과
 ENG_WATCH_REACH = 5
 ENG_WATCH_UNTIL = 30
-# 전선 유지(현진 테마 브랜치): LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만인 동안 우리 캠퍼스 공학관 앞 길목(적 본진 →
-# 공학관 최단 경로에서 공학관으로부터 LINE_DEPTH걸음 앞 칸)에 전투병 "그 칸 LINE_REACH걸음 안 적 전투병 + 1"명을 세운다
-# (가치 = 공학관 가치 × LINE_WEIGHT). 서버에서 우리 공학관을 20턴 안에 잃으면 2-6, 지키면 39-18(docs/benchmarks.md 9/30 분석).
-# 조기 경보(ENG_WATCH)는 적이 5걸음 안에 온 뒤 공학관 위에 서고, 전선은 그보다 앞에서 길을 막는다. LINE_UNTIL 0 = 끔.
-# 끔: 흉내 봇 풀에서 공학관 잃음 41.5 → 33.5%(40턴·2걸음)로 줄지만 daa1888 상대 55.5 / 40.5%(시드 200~299 / 300~399),
-# 서버 맵 55.9%, 학습 봇 상대 44%(daa1888 39%). 60턴·건물 8개까지는 풀 95%지만 46.5 / 42%, 학습 봇 33% (docs/benchmarks.md)
-LINE_UNTIL = 0
-LINE_BUILDINGS = 99
-LINE_DEPTH = 3
-LINE_REACH = 3
-LINE_WEIGHT = 1.0
-LINE_EXTRA = 0  # 길목마다 더 세울 인원
-LINE_PATHS = 1  # 2 이상이면 적 본진에서 오는 최단 경로들이 지나는 길목을 이만큼까지 (1 = 한 경로의 한 칸)
-LINE_KINDS = {"ENG"}  # 길목을 지킬 우리 캠퍼스 건물 종류
-# 강화도 끔 (40턴·2걸음 기준, daa1888 상대 시드 200~299 / 300~399): +2명 52 / 41.5%, 길목 3칸 48%, 학생회관 57 / 44%,
-# 학생회관 +2명 55 / 37%, 셋 다 38%. 학습 봇 상대 24~37% (daa1888 39%) (docs/benchmarks.md)
-# 창(일직선 공격): SPEAR_FROM~SPEAR_UNTIL턴, 우리 본진 → 적 본진 최단 경로에서 SPEAR_WIDTH걸음 이내로 벗어난 건물 중 우리 것이 아닌
-# 가장 가까운 건물 하나에 전투병 "위협 + SPEAR_EXTRA"명(가치 SPEAR_VALUE). 가져오면 다음 목표가 직선을 따라 앞으로. 0 = 끔.
-# 끔: daa1888 상대 1턴부터 +2 / +5명 44 / 24%, 30턴부터 42 / 45%, 흉내 봇 풀 79~89% (daa1888 90%)
-SPEAR_FROM = 0
-SPEAR_UNTIL = 160
-SPEAR_EXTRA = 2
-SPEAR_VALUE = 6.0
-SPEAR_WIDTH = 2
 # 국면 전환 실험. 현진 봇 상대 300경기에서 31턴 뒤 97~100%의 턴이 위협 대응(THREAT)이라 다른 국면이 거의 돌지 않았다.
 # 열세: 적 전투병이 우리보다 BEHIND_MARGIN명 이상 많으면 러시·초소·급습·전선을 끄고 지키는 국면(0 = 끔). 진 경기는 21~110턴의
 # 37%가 전투병 10명 넘게 뒤진 턴이었다. 굳히기 먼저: HOLD 조건(LATE_TURN 뒤 추정 점수 앞섬)이면 위협 대응보다 굳히기(0 = 끔).
@@ -305,14 +293,6 @@ _flag_goal: dict[Pos, set[Pos]] = {}  # 지난 턴 이동 뒤 칸 → 그 칸 �
 # 쪽으로" 가지에서, 10명은 위험한 칸에 머물다, 11명은 안전하다고 본 칸에서 죽었다(적 병원 생산 8 · 적 역 순간이동 3).
 # 두 걸음 앞 보기: 목표 쪽으로 나아갈 칸은 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병일 때만 (0 = 끔)
 FLAG_LOOKAHEAD = 0
-# 포위 탈출(현진 테마 브랜치): 사방이 위험해 "위험해도 목표 쪽으로" 가던 깃발병(사망의 75%)이, 대신 제자리·이웃 중 (적 위협 − 우리
-# 전투병)이 가장 작은 칸으로 간다(0 = 끔). 평소 이동은 그대로라 점령 속도를 늦추지 않는다
-# 구조 요청: 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "그 칸 위협 + 1"명 과제(가치 RESCUE_VALUE × 인원, 0 = 끔)
-# 둘 다 켬 — daa1888(c711702) 상대 63% (56–69%) / 60% (53–67%) (시드 200~299 / 300~399), 서버 맵 51.8%, 학습 봇 26fa986 상대
-# 41% (daa1888 39%), 흉내 봇 풀 평균 90 → 95%, 우리 깃발병 사망 0.83 → 0.63명(10~30턴). 하나씩: 탈출만 53.5%·풀 90%,
-# 구조 1만 57 / 63%·서버 맵 48.2%·학습 봇 33%, 구조 3은 35% (docs/benchmarks.md)
-FLAG_ESCAPE = 1
-RESCUE_VALUE = 1.0
 # 적 병원 생산: 위협 맵에 상대 병원에서 이번 턴 만들 수 있는 전투병을 더한다 (0 = 끔, 본진만)
 HOSPITAL_THREAT = 0
 # 공학관 타이밍 생산: 우리에게 공학관이 없고 곧 얻으면(eng_coming) 전투병 생산을 미뤄 값 2로 산다(0 = 끔, 1 = 이번 턴 끝, 2 = 다음
@@ -335,8 +315,227 @@ BANK_SAFE = 0
 # 65.2 · 68.2 / 63.9**(풀 80 → 88.1 · 81.6%), 반경 3 × 0.5 62.0 / 62.3. 반경 2 × 0.5는 제출본(7941b88) 71.2 / 70.5%, 현진 78.5 / 82.0%
 FLAG_GUARD = 2
 FLAG_GUARD_WEIGHT = 0.5
+# 수비 깃발 대상 확대 (10/1 리플레이 분석): 경제 건물 말고도 추정 점수가 FLAG_GUARD_SCORE 이상인 우리 건물에 수비 깃발을 세운다
+# (0 = 끔). 9/30 20:00 탈락도 락이다전에서 4점 역을 9번 잃었다 — 깃발병이 역과 옆 칸을 오가며 비울 때마다 적이 걸어 들어왔다.
+# 074803e 위 직접 대결 300판(새 시드 40000번대): 점수 3 이상 대 074803e 44.0 · 337ab49 52.3(기준 58.0) · strong_wide 69.7%(74.0),
+# 2 이상 36.7 · 47.7 · 67.0% — 깃발병이 고점 건물에 묶여 점령을 못 한다. 끈 채 남김
+FLAG_GUARD_SCORE = 0.0
+# 선제 수비 (10/1 분석, 켬): 지키기는 적 깃발병이 GUARD_RADIUS걸음 안에 와야 시작해, 멀리서 오는 소규모 기습조(깃발병 1 + 전투병 2)에게
+# 후방 빈 건물을 내줬다(ACE전 학생회관·공학관·도서관). 적 깃발병이 EARLY_GUARD걸음 안이고 우리 전투병이 그 깃발병보다
+# EARLY_SLACK턴 이상 먼저 닿지 못하는 우리 건물에 "선제 수비" 과제를 미리 낸다(0 = 끔). 필요 인원 = max(그 칸 위협,
+# 깃발병 곁 적 전투병) + 1, 가치 = 건물 가치 × EARLY_GUARD_WEIGHT
+# 074803e 위 직접 대결(시간 배율 3, 몰수 0): 새 시드 40000번대 300판 → 고르지 않은 41000번대 400판. 6걸음 여유 2: 대 074803e
+# 55.3 → 53.7%, 대 337ab49 58.0 → 62.0 / 56.0 → 60.5%, 대 strong_wide 74.0 → 77.7 / 78.5 → 79.2%. 여유 1은 +2~5%p, 여유 0은 둘째
+# 묶음에서 효과 없음, 8걸음은 6걸음과 비슷. 최대 응답 17 ms(기준 15~22)
+EARLY_GUARD = 6
+EARLY_SLACK = 2
+EARLY_GUARD_WEIGHT = 1.0
 # 먼 과제 억제: 전투병 과제 배정 점수 = 가치 / (1 + 가장 먼 전투병 거리) ** DIST_POWER (1 = 예전)
 DIST_POWER = 1.0
+# ---- 값 차이 교전 (moonwon/eval-tuning 9/30, 모두 기본 끔) ----
+# 전투병은 1:1로 상쇄되므로, 우리 값이 2이고 상대가 3이면 동수 교환마다 상대가 1자원씩 더 잃는다(공학관을 가진 쪽의 이득).
+# 동수 공격: 우리 값이 더 싸면 급습·러시의 필요 인원을 "위협 + 1~2"에서 "위협"(최소 1)으로 — 동수로 상쇄돼도 이득이다
+TRADE_TIE = 0
+# 소모전: 우리 값이 더 싸면 적 전투병이 TRADE_HUNT_MIN명 이상 선 칸마다 과제(필요 인원 = 그 칸 다음 턴 위협, 동수면 상쇄),
+# 가치 = TRADE_HUNT × 적 인원 × (상대 값 − 우리 값) / 우리 값 (0 = 끔)
+TRADE_HUNT = 0.0
+TRADE_HUNT_MIN = 2
+# ---- 한 턴 앞 예측 (moonwon/eval-tuning 9/30, 기본 끔) ----
+# 상대 시점으로 이 봇의 판단을 한 번 더 돌려 상대가 이번 턴 둘 수를 예측한다(상대 모델 = 우리 봇, 상대의 기억은 따로 둔다).
+# 위협 맵은 "적 전투병이 모두 이 칸으로 온다"는 최악 가정이라 깃발병이 자주 멈추고 필요 인원이 부풀었다.
+# FORECAST: 1 = 깃발병 안전 판단만, 2 = 모든 위협 계산에 min(최악, 예측 + FORECAST_SLACK)을 쓴다 (0 = 끔)
+FORECAST = 0
+FORECAST_SLACK = 1
+# 처치 과제를 적 깃발병의 지금 칸이 아니라 예측한 이번 턴 도착 칸에 낸다 (0 = 끔, FORECAST와 따로)
+FORECAST_KILL = 0
+# 직전 턴 판단이 이 시간(ms, 실제 실행 환경에서 잰 값)을 넘었으면 이번 턴은 예측하지 않는다(응답 제한 300 ms)
+FORECAST_SKIP_MS = 90.0
+_timing = {"last": 0.0}
+# ---- 성혁 테마 브랜치 기능 (sunghyuk/attack-expand bb27671에서 옮김, 모두 기본 끔 = 26fa986과 같은 동작) ----
+# 점령 비용(SH_COST_BASE)·광장 미루기(SH_PLAZA_SKIP)·관성(SH_INERTIA)은 7941b88에서 이미 옮겼다. 나머지를 스위치로 옮긴다.
+# 건물 가치. 학생회관: 예전 0.02 × 남은 턴은 160턴에 0이 되므로, 1 = max(1.8, 3.6 − 0.2 × (턴 // 5)) (45턴에 하한).
+# 공학관: 1 = max(2.0, 3.0 − 0.2 × (턴 // 5)) (복리 경제 건물이라 초반에 더 값지다, 25턴에 하한). 두 값 모두 학습 층이
+# HALL_VALUE_PER_TURN · FUNCTION_VALUE["ENG"]를 바꾼 비율만큼 곱한다(학습한 W가 그대로 뜻을 갖게)
+SH_HALL_DECAY = 0
+SH_ENG_DECAY = 0
+# 역: 1 = 순간이동 짝(STATION_MIN_LINK걸음 이상 떨어진 다른 역)과 그 역 주변 건물로 값을 매긴다(station_value). 첫 역은
+# STATION_FIRST(순간이동이 아직 안 열림), 짝을 완성하는 역은 STATION_BASE + 가장 연계되는 역 주변 가치, 셋째부터 STATION_EXTRA
+SH_STATION = 1
+STATION_FIRST = 0.0
+STATION_BASE = 2.0
+STATION_EXTRA = 0.3
+STATION_MIN_LINK = 4
+STATION_NEIGHBOR = 3
+STATION_NEIGHBOR_VALUE = {"ENG": 1.0, "DEPOT": 0.6, "HALL": 0.3}
+# 고립 병원: 본진에서도 어느 역에서도 HOSPITAL_ALONE_DIST걸음 밖에 떨어진 병원의 기능 가치(0 = 끔, 성혁 2.5). 그 구역에
+# 병력을 내려놓는 유일한 수단. 성혁 브랜치는 이 밖에 DEPOT_VALUE 3.5 · FUNCTION_VALUE["LIBRARY"] 1.0 (상수만 바꾸면 된다)
+HOSPITAL_ISOLATED = 2.5
+HOSPITAL_ALONE_DIST = 4
+# 호위 인원을 턴별로: 1 = 이동 중 깃발병 호위 인원이 20턴 전 SH_ESCORT_T0 · 40턴 전 SH_ESCORT_T1 · 80턴 전 SH_ESCORT_T2 ·
+# 그 뒤 SH_ESCORT_T3 (0명이면 그 구간은 이동 중 호위 없음). 끄면 ESCORT_NEED(1명)로 처음부터 끝까지
+SH_ESCORT = 1
+SH_ESCORT_T0 = 0
+SH_ESCORT_T1 = 1
+SH_ESCORT_T2 = 4
+SH_ESCORT_T3 = 1
+ESCORT_LEAD = 1  # 1 = 호위가 깃발병이 이번 턴 들어갈 칸을 먼저 차지한다(선행), 0 = 깃발병이 지금 있는 칸(동행)
+ESCORT_ADAPTIVE = 0  # 1 = 호위 인원 = 그 칸 위협 + 1 (ESCORT_MIN ~ ESCORT_MAX)
+ESCORT_MIN = 1
+ESCORT_MAX = 6
+# 비키기: 1 = 과제 없는 깃발병이 우리 건물 위·옆에 있으면 IDLE_KEEP(공학관·학생회관 1, 나머지 2)걸음까지 물러난다. 소유는
+# 떠나도 유지되고, 남으면 깃발 뽑기(내 건물 위 내 깃발병이 죽으면 즉시 중립)의 표적이다. 중립·상대 건물 위에서는 안 비킨다
+SH_IDLE = 0
+IDLE_KEEP = {"ENG": 1, "HALL": 1}
+IDLE_KEEP_DEFAULT = 2
+FLAG_STOP_TURN = 999  # 이 턴부터 깃발병을 만들지 않는다 (999 = 끔)
+# ---- 성혁 decoy-flex 브랜치 기능 (sunghyuk/decoy-flex 412f1fc, 현진 봇 위에서 만든 것을 옮김. 모두 기본 끔) ----
+# 성혁 측정(26fa986 상대, 현진 봇 기준 8%): 양동 항상 17.8 · 조건부 16.0, 기동대 15.5, 역 V3 14.2, 암살 12~13, 최소 3명 9.0%.
+# 유동 별동대: 별동대 인원 = 그 칸을 노리는 적(다음 턴 위협, SQUAD_REACH걸음 안 적 전투병 중 큰 쪽) + 1을 SQUAD_MIN~SQUAD_MAX로
+SQUAD_FLEX = 1
+SQUAD_MIN = 1
+SQUAD_MAX = 5
+SQUAD_REACH = 2
+# 양동: DIVERSION_FROM~DIVERSION_UNTIL턴(FROM 0 = 끔), 주력 전선 가까이(우리 전투병이 DIVERSION_FRONT_REACH걸음 안에
+# DIVERSION_MIN_SUPPORT명 이상)이고 수비(DIVERSION_REACH걸음 안 적 전투병)가 DIVERSION_MAX_DEF 이하인 건물 하나에 전투병 "수비 +
+# DIVERSION_EXTRA"명(2~DIVERSION_MAX), 깃발병 점령 가치 × DIVERSION_CAPTURE. 학생회관·공학관은 우선순위(× DIVERSION_PRIORITY)일 뿐
+# 다른 건물도 된다. DIVERSION_PATIENCE턴 동안 소유자가 안 바뀌면 DIVERSION_COOLDOWN턴 접고, 우리 전투병이 적의 DIVERSION_MIN_RATIO배
+# 미만이면 하지 않는다. 상대 병력을 전선에서 분산시키는 것이 목적이다
+DIVERSION_FROM = 24
+DIVERSION_UNTIL = 120
+DIVERSION_PRIORITY_KINDS = {"HALL", "ENG"}
+DIVERSION_PRIORITY = 1.5
+DIVERSION_REACH = 2
+DIVERSION_MAX_DEF = 4
+DIVERSION_FRONT_REACH = 5
+DIVERSION_MIN_SUPPORT = 4
+DIVERSION_PATIENCE = 12
+DIVERSION_COOLDOWN = 25
+DIVERSION_MIN_RATIO = 0.8
+DIVERSION_EXTRA = 1
+DIVERSION_MAX = 6
+DIVERSION_VALUE = 3.0
+DIVERSION_CAPTURE = 1.5
+# 조건부 양동: 신호 S = 가치 × 우선순위 / (1 + 수비) / (2 + 가장 가까운 우리 전투병) × (1 + 어그로/12), 어그로 = 목표에서
+# DIVERSION_AGGRO_MIN_DIST~MAX_DIST걸음 사이 적 전투병. 시작 = ① 전선 팽팽(전투병 비율 TIGHT_LO~TIGHT_HI)이고 S ≥ SIGNAL_TIGHT, 또는
+# ② 쉬운 탈취(수비 ≤ EASY_DEF)에 어그로 ≥ AGGRO_MIN이고 S ≥ SIGNAL_EASY. 시작한 뒤에는 S ≥ SIGNAL_KEEP인 동안 유지(관성)
+DIVERSION_COND = 1
+DIVERSION_TIGHT_LO = 0.85
+DIVERSION_TIGHT_HI = 1.2
+DIVERSION_SIGNAL_TIGHT = 0.8
+DIVERSION_SIGNAL_EASY = 1.0
+DIVERSION_SIGNAL_KEEP = 0.5
+DIVERSION_EASY_DEF = 1
+DIVERSION_AGGRO_MIN = 6
+DIVERSION_AGGRO_MIN_DIST = 3
+DIVERSION_AGGRO_MAX_DIST = 7
+_diversion: dict = {"target": None, "since": 0, "owner": None, "banned": {}}
+# 조건부 암살: 무방비한 적 깃발병(그 칸 위협 0이고 ASSASSIN_GUARD_R걸음 안에 적 전투병 없음)을, 신호 (KILL_VALUE × n + 건물 가치 +
+# ASSASSIN_EXTRA × n) / (1 + 가장 가까운 우리 전투병 거리) ≥ ASSASSIN_SIGNAL이고 거리 ≤ ASSASSIN_MAX_DIST일 때 가장 가까운 한 명이
+# 잡으러 간다(처치 과제 가치 × ASSASSIN_BOOST, 필요 1명). 누구를 지정하지 않는다
+ASSASSIN_COND = 0
+ASSASSIN_GUARD_R = 2
+ASSASSIN_EXTRA = 2.0
+ASSASSIN_SIGNAL = 1.0
+ASSASSIN_MAX_DIST = 3
+ASSASSIN_BOOST = 3.0
+# 최소 명령 인원: MIN_ORDER_FROM턴부터 전투병 과제 필요 인원을 MIN_ORDER명 이상으로 (양동·암살 예외, 0 = 끔)
+MIN_ORDER = 0
+MIN_ORDER_FROM = 20
+ORDER_EXEMPT = {"양동", "암살"}
+# 역 가치 V3 (SH_STATION 위에): 이 역 자신의 주변(전진 거점), 순간이동으로 아끼는 걸음(연계 역까지 거리), 근처 우리 공학관·학생회관
+# (수비 지원)을 더한다
+STATION_V3 = 0
+STATION_LINK_GAIN = 0.5
+STATION_DEFENSE = 0.6
+# 역 차단 (10/1 10:00 리더보드 분석, 기본 끔): 역 가치는 우리 순간이동망만 셌고 상대 망을 끊는 값은 없었다. 그 회차 160턴까지 간 진
+# 경기는 상대가 역 2개 이상(턴당 5명 순간이동)을 가진 턴이 116~153턴이었고(이긴 경기는 대부분 80턴 아래), 생산·지출은 같은데 상대
+# 전투병이 중앙 32~35 : 우리 18~19로 앞섰다. STATION_DENY > 0 = 상대 역이 n개(≥ 2)일 때 상대 역 가치에 STATION_DENY / (n − 1)을
+# 더한다(n − 1개를 빼앗아야 망이 끊긴다). STATION_DENY_PRE > 0 = 상대 역이 1개일 때 그 역과 이어질 중립 역에 STATION_DENY ×
+# 이 값(상대 망이 생기기 전에 먼저 차지). STATION_RAID = 1 = 상대 역이 2개 이상이면 상대 역도 급습(전투병) 대상, 2 = 상대 역이
+# 딱 2개일 때만(하나를 빼앗으면 망이 끊길 때)
+STATION_DENY = 0.0
+STATION_DENY_PRE = 0.0
+STATION_RAID = 0
+# 포위된 깃발병 (10/1 10:00 리더보드 분석, 기본 끔): 진 경기는 깃발병이 판당 12.9명 죽었고(이긴 경기 5.5) 그중 11.7명이 위협(1걸음 안
+# 적 전투병)이 우리 전투병보다 많은 칸으로 걸어 들어가 죽었다 — 지금 칸도 이웃도 위험할 때의 "위험해도 목표 쪽으로" 가지. 리더보드
+# 두 회차 진 15판에서 이 강행 279번 중 그 칸이 실제로 죽는 칸이었던 것이 181번(65%), 같은 순간 열세(위협 − 우리 전투병)가 가장 작은
+# 이웃이었다면 131번(47%). FLAG_ESCAPE = 1 = 포위되면 열세가 가장 작은 이웃으로(같으면 목표에 가까운 쪽), 2 = 제자리도 후보, 0 = 끔.
+# ee4ea4b 위 직접 대결(새 시드 63000·64000번대 600판씩): 1은 대 ee4ea4b 64.4 · 68.0%, 337ab49 66.8 → 77.0 · 67.8 → 75.3%,
+# strong_wide 82.5 → 85.7 · 79.2 → 85.7%, 현진 7b8b67e 91.8 → 94.5% — 쓴 상대 모두 +. 2는 대 ee4ea4b 54.1%. 로컬 80판에서 우리
+# 깃발병 생산 9.8 → 8.8명, 상대 9.8 → 11.2명 (docs/benchmarks.md "진 경기 분석 스위치")
+FLAG_ESCAPE = 1
+# 목표 쪽 칸보다 열세가 이만큼 이상 작은 칸이 있을 때만 피한다(0 = 조금이라도 작으면 피함). 시드 65000번대 400판: 0 · 1(열세가 정수라
+# 0과 같음) 대 ee4ea4b 68.6%, 2 64.8%, 3 60.9%
+FLAG_ESCAPE_GAIN = 0
+# 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
+# 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
+MOBILE = 1
+MOBILE_FLIPS = 2
+MOBILE_WINDOW = 80
+MOBILE_CALM = 30
+MOBILE_SIZE = 3
+MOBILE_WEIGHT = 2.0
+MOBILE_ENEMY_DIST = 9
+# 기동대 수정(성혁 10/1): "우리 진영 깊은 곳"을 상대 본진까지 걸음이 아니라 (상대 본진까지 걸음 − 우리 본진까지 걸음) ≥ MOBILE_DEPTH로
+# 본다. 앞 기준은 벽 너머 상대 구석 건물(10,14)을 우리 진영으로 잘못 셌다. 0이면 예전 기준(MOBILE_ENEMY_DIST). 급습이 40턴 안팎
+# 간격으로 오는 경기(리플레이: 공학관 (1,2)를 31·72·108·145턴에 잃음)를 잡으려고 횟수·기간을 2번/80턴으로 완화했다.
+MOBILE_DEPTH = 3
+_lost: dict = {"owner": {}, "turns": {}}  # 건물 id → 지난 소유자 / 우리가 잃은 턴 목록
+
+# 양동 기대값(성혁 10/1): DIVERSION_EV면 무작정 희생하지 않고 성공 확률과 건물 가치를 본다.
+#   p = 우리 지원 전투병(목표에서 DIVERSION_FRONT_REACH걸음 안) / (지원 + 목표에서 DIVERSION_RIVAL_REACH걸음 안의 적 전투병)
+#   EV = p × (건물 가치 × 우선순위) − (1 − p) × 보낼 인원 × DIVERSION_LOSS_PER_W
+# 시작: p ≥ DIVERSION_P_MIN이고 EV ≥ DIVERSION_EV_MIN. 유지: EV ≥ DIVERSION_EV_KEEP. 0이면 끔.
+# DIVERSION_SKIP_HOME이면 우리 진영 깊은 곳(MOBILE_DEPTH 기준) 건물은 양동 후보에서 뺀다 — 그건 양동이 아니라 되찾기(탈환·기동대)다.
+DIVERSION_EV = 0
+DIVERSION_SKIP_HOME = 0
+DIVERSION_RIVAL_REACH = 5
+DIVERSION_P_MIN = 0.55
+DIVERSION_EV_MIN = 1.0
+DIVERSION_EV_KEEP = 0.4
+DIVERSION_LOSS_PER_W = 0.3
+
+# 사냥꾼 조(성혁 10/1): HUNTERS_FORM_UNTIL턴 안에 만든 전투병 HUNTERS_SIZE명을 하나의 무리(한 칸에 뭉쳐 이동)로 따로 둔다. 다른 과제에는
+# 배정하지 않고, 죽지 않는 것을 우선한다(밟을 칸의 적 위협 ≤ 인원 − HUNTERS_MARGIN). 하는 일:
+#  1) 무방비한 적 깃발병(HUNTERS_GUARD_R걸음 안에 적 전투병이 없고 그 칸 위협이 안전 범위)을 잡으러 간다.
+#  2) 잡을 깃발병이 없으면 미끼: 안전한 칸 중 적 전투병 무리와 HUNTERS_KITE걸음을 유지해 적이 쫓아오게 한다. 어느 무리를 미끼 삼을지는
+#     양동 목표가 있으면 그 수비대, 없으면 상대 공학관·학생회관 근처를 지키는 무리다(그 병력을 전선·핵심 건물에서 떼어 놓는다).
+# 죽은 인원은 다시 채우지 않는다. 0이면 끔.
+HUNTERS = 0
+HUNTERS_SIZE = 5
+HUNTERS_FORM_UNTIL = 10
+HUNTERS_MARGIN = 1
+HUNTERS_GUARD_R = 1
+HUNTERS_KITE = 3
+HUNTERS_FLAG_EXTRA = 1.5  # 적 깃발병 한 명(자원 5 = 전투병 1.7명)의 값
+_hunters: dict = {"cells": Counter(), "designated": 0, "formed": False, "deaths": 0}
+
+# 도미노 소탕(성혁 10/1): 우리 점수가 맵 총점의 과반이고, 상대 건물이 SWEEP_ENEMY_MAX곳 이하이고, 우리 전투병이 적 + SWEEP_W_MARGIN 이상이며
+# SWEEP_FROM턴 뒤면 소탕 국면에 들어간다(최우선 국면, Latch로 3턴 유지). 남은 상대 건물마다 전투병 "위협 + SWEEP_EXTRA"명을 배정해(필요
+# 인원이 적은 건물부터, 합이 우리 전투병 × SWEEP_FRAC를 넘는 건물은 타격 목록에서 뺀다) 한꺼번에 덮친다. 깃발병은 상대 건물 점령 가치를
+# 2배로 받아 계속 점령한다. 상대 건물이 모두 중립화되면 상대 점수가 0이 된다. 0 = 끔.
+SWEEP = 0
+SWEEP_FROM = 40
+SWEEP_ENEMY_MAX = 5
+SWEEP_W_MARGIN = 0
+SWEEP_EXTRA = 1
+SWEEP_WEIGHT = 3.0
+SWEEP_FRAC = 0.85
+HALL_VALUE_REF = 0.02  # 학습 층 비율의 기준 (= 위 HALL_VALUE_PER_TURN 기준값)
+ENG_VALUE_REF = 2.0  # (= FUNCTION_VALUE["ENG"] 기준값)
+# ---- 상대 스타일 감지 (moonwon/eval-tuning 9/30, 기본 끔) ----
+# 서버 리플레이 80여 판에서 우리가 진 강팀(ACE·참새튀김기·페이커·모든상금은…·렛츠고·치명ㄷ)은 공통으로 전투병을 20~40칸에 넓게
+# 깔고, 깃발병은 3~6명이며 호위 없이 우리 건물 2칸 안에 오는 일이 드물었다(턴 비율 0.04~0.25). 이긴 상대는 대부분 0.5~0.9.
+# STYLE_FROM턴부터 STYLE_UNTIL턴까지 모은 지표로, STYLE_TURN턴 뒤 "적 전투병 칸 평균 ≥ STYLE_CELLS이고 호위 없는 접근 비율
+# ≤ STYLE_RAID"이면 넓게 까는 강팀으로 보고 STYLE_MULT(학습 층 상수 → 배수)를 곱한다 (STYLE = 0이면 끔)
+STYLE = 0
+STYLE_FROM, STYLE_TURN, STYLE_UNTIL = 5, 30, 60
+STYLE_CELLS = 19.0
+STYLE_RAID = 0.3
+STYLE_MULT: dict[str, float] = {}
+_style = {"turns": 0, "raid": 0, "cells": 0, "cell_turns": 0, "wide": False}
+_enemy_memory: dict[str, object] = {}  # 상대 시점 판단이 쓰는 턴 간 기억 (우리 기억과 섞지 않는다)
+_MEMORY_NAMES = ("_phase", "_depots_taken", "_last_owned", "_served", "_flag_goal", "_diversion", "_lost", "_hunters")
 
 _phase = {"name": "EXPAND", "calm": 0}  # 직전 국면과, 그 국면의 조건이 연속으로 풀린 턴 수
 
@@ -377,6 +576,11 @@ class Turn:
         self.makers: dict[str, list[Maker]] = {"F": [], "W": []}
         self.extra_warriors = 0
         self.deadline: int | None = None  # 막판: 남은 턴 (이 안에 끝낼 수 없는 점령 짝은 배정하지 않는다)
+        self.pred: tuple[Counter, dict[Pos, Pos]] | None = None  # 한 턴 앞 예측 (FORECAST)
+        self.diversion_ok = False  # 이번 국면이 양동을 켰는가 (점령 과제가 읽는다)
+        self.diversion: Building | None = None
+        self.hunter_move: tuple[Pos, Pos, int] | None = None  # (출발, 도착, 인원) 이번 턴 사냥꾼 조의 움직임
+        self.hunter_stay: dict[Pos, int] = {}  # 집결 중이라 제자리에 있는 사냥꾼
 
     def tasks(self, unit: str) -> list[Task]:
         """이번 국면이 켠 과제 만들기 함수로 `unit` 병종의 과제 목록을 만든다."""
@@ -401,9 +605,69 @@ Maker = Callable[[Turn], list[Task]]  # 과제 만들기 함수: 칠판을 읽�
 
 
 def decide(world: World) -> list[Action]:
+    start = time.perf_counter()
+    pred = None
+    if (FORECAST or FORECAST_KILL) and _timing["last"] <= FORECAST_SKIP_MS:
+        pred = predict_enemy(world)
+    learned.apply(world, globals())  # 학습한 상황별 가중치 층 (agent/learned.py)
+    if STYLE and watch_style(world):
+        g = globals()
+        for name, mult in STYLE_MULT.items():
+            g[name] = int(round(g[name] * mult)) if isinstance(g[name], int) else g[name] * mult
     turn = Turn(world)
+    turn.pred = pred
     TURN_TREE.tick(turn)
+    _timing["last"] = (time.perf_counter() - start) * 1000
     return turn.actions
+
+
+def watch_style(world: World) -> bool:
+    """상대 스타일 지표를 이번 턴 상태로 갱신하고, 넓게 까는 강팀으로 보이는지 돌려준다(STYLE)."""
+    s = _style
+    if world.turn <= 1:
+        s.update(turns=0, raid=0, cells=0, cell_turns=0, wide=False)
+    me, enemy = world.me, world.enemy
+    if STYLE_FROM <= world.turn <= STYLE_UNTIL:
+        ew = world.units_of(enemy, "W")
+        ours = [b.pos for b in world.owned(me)]
+        s["turns"] += 1
+        if ours and any(min(manhattan(p, b) for b in ours) <= 2 and not any(manhattan(p, q) <= 1 for q, _ in ew)
+                        for p, _ in world.units_of(enemy, "F")):
+            s["raid"] += 1
+        if world.turn >= 20 and ew:
+            s["cells"] += len(ew)
+            s["cell_turns"] += 1
+        if world.turn >= STYLE_TURN and s["cell_turns"]:
+            s["wide"] = (s["cells"] / s["cell_turns"] >= STYLE_CELLS and s["raid"] / s["turns"] <= STYLE_RAID)
+    return s["wide"]
+
+
+def predict_enemy(world: World) -> tuple[Counter, dict[Pos, Pos]]:
+    """상대가 이번 턴 둘 수를 이 봇의 판단으로 예측: (이동 뒤 (병종, 칸) → 인원, 적 깃발병 출발 칸 → 도착 칸).
+    상대 시점 판단은 우리 턴 간 기억(국면·관성 등)을 건드리지 않도록 상대 몫의 기억으로 바꿔 끼운 채 돌린다."""
+    g = globals()
+    ours = {name: g[name] for name in _MEMORY_NAMES}
+    if world.turn <= 1 or not _enemy_memory:
+        _enemy_memory.update(_phase={"name": "EXPAND", "calm": 0}, _depots_taken=set(), _last_owned={},
+                             _served=set(), _flag_goal={},
+                             _diversion={"target": None, "since": 0, "owner": None, "banned": {}},
+                             _lost={"owner": {}, "turns": {}},
+                             _hunters={"cells": Counter(), "designated": 0, "formed": False, "deaths": 0})
+    g.update(_enemy_memory)
+    try:
+        view = replace(world, me=world.enemy)
+        learned.apply(view, g)
+        t = Turn(view)
+        TURN_TREE.tick(t)
+        actions = t.actions
+    finally:
+        _enemy_memory.update({name: g[name] for name in _MEMORY_NAMES})
+        g.update(ours)
+    flag_dst: dict[Pos, Pos] = {}
+    for a in actions:
+        if isinstance(a, Move) and a.kind == "F" and a.src not in flag_dst:
+            flag_dst[a.src] = a.dst
+    return after_moves(world, world.enemy, actions), flag_dst
 
 
 def read_situation(t: Turn) -> None:
@@ -420,7 +684,17 @@ def read_situation(t: Turn) -> None:
     t.enemy_flags = dict(sorted(world.units_of(enemy, "F"), key=lambda u: key(u[0])))
     t.enemy_warriors = world.units_of(enemy, "W")
     t.threat = threat_map(t.enemy_warriors + enemy_spawnable(world), world.map.passable)
+    t.flag_threat = t.threat
+    t.flag_dst = {}
+    if t.pred is not None:
+        moved, t.flag_dst = t.pred
+        if FORECAST:
+            blend = {p: min(v, moved[("W", p)] + FORECAST_SLACK) for p, v in t.threat.items()}
+            t.flag_threat = blend
+            if FORECAST >= 2:
+                t.threat = blend
     t.values = {b.id: building_value(world, b) for b in world.buildings.values()}
+    t.diversion = diversion_target(t)
     t.others = sorted((b for b in world.buildings.values() if b.owner != me), key=lambda b: key(b.pos))
     # 상대 깃발병이 있는 건물은 경합이라, 전투병이 뽑아 주기 전에는 깃발병 목표가 아니다
     t.free_targets = [b for b in t.others if b.pos not in t.enemy_flags]
@@ -453,7 +727,10 @@ def reserve_capture_cost(t: Turn) -> None:
 
 def plan_warrior_tasks(t: Turn) -> None:
     """전투병 과제 목록(이번 국면이 켠 종류)과, 과제가 없는 전투병의 공통 목표."""
-    t.w_tasks = sorted(trade_weighted(t, t.tasks("W")), key=lambda task: t.key(task.pos))
+    t.w_tasks = sorted(trade_weighted(t, t.tasks("W") + hunt_tasks(t)), key=lambda task: t.key(task.pos))
+    if MIN_ORDER and t.world.turn >= MIN_ORDER_FROM:  # 소수 전투병에게는 명령을 주지 않는다 (양동·암살 예외)
+        t.w_tasks = [task if task.kind in ORDER_EXEMPT or task.need >= MIN_ORDER else replace(task, need=MIN_ORDER)
+                     for task in t.w_tasks]
     # 과제가 없는 전투병은 모두 같은 목표 집합으로 가므로, 목표 쪽에서 BFS를 한 번만 한다.
     # (전투병마다 BFS를 하면 유닛 수에 비례해 느려진다 — 서버에서 186명일 때 응답 214 ms)
     t.goals = set(t.enemy_flags) or {b.pos for b in t.free_targets}
@@ -473,7 +750,7 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -560,7 +837,11 @@ def hospital_coming(t: Turn, sites: list[Pos]) -> bool:
 def plan_warriors(t: Turn) -> None:
     """전투병 배정: 과제마다 가장 가까운 전투병을 붙인다(이번 턴 새로 만든 전투병 포함)."""
     global _served
+    hunters_update(t.world)
     warriors = with_spawned(t.world.units_of(t.world.me, "W"), t.w_site, t.make_w, t.key)
+    t.hunter_move, t.hunter_stay = None, {}
+    if HUNTERS:
+        warriors = hunters_plan(t, warriors)
     t.w_plan, t.w_idle, t.arrival = assign_warriors(warriors, t.w_tasks, t.dist_to, frozenset(_served))
     _served = {dst for _, dst in t.w_plan}
 
@@ -620,6 +901,13 @@ def move_warriors(t: Turn) -> None:
                 w_after[dst] -= n
                 w_after[src] += n
     t.actions += [Move(src, "W", n, dst) for (src, dst), n in w_steps.items()]
+    if t.hunter_move:  # 사냥꾼 조: 한 무리로 움직인다
+        src, dst, n = t.hunter_move
+        if dst != src:
+            t.actions.append(Move(src, "W", n, dst))
+        w_after[dst] += n
+    for pos, n in t.hunter_stay.items():
+        w_after[pos] += n
     t.w_after = w_after
 
 
@@ -633,11 +921,15 @@ def replan_flags(t: Turn) -> None:
 
 def move_flags(t: Turn) -> None:
     """깃발병 이동: 한 명씩 FLAG_TREE로 다음 칸을 정한다."""
-    threat, w_after = t.threat, t.w_after
+    threat, w_after = t.flag_threat, t.w_after
 
     def safe(pos: Pos) -> bool:
         # 전투병 수가 같으면 서로 상쇄되고 남은 전투병이 없어 깃발병은 살아남는다
         return threat.get(pos, 0) <= w_after[pos]
+
+    def margin(pos: Pos) -> int:
+        """이 칸의 열세: 다음 턴 올 수 있는 적 전투병 − 이동 뒤 우리 전투병 (FLAG_ESCAPE)."""
+        return threat.get(pos, 0) - w_after[pos]
 
     def ahead(pos: Pos) -> bool:
         """나아갈 칸: 안전하고, FLAG_LOOKAHEAD면 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병(다음 턴 포위 대비)."""
@@ -655,14 +947,37 @@ def move_flags(t: Turn) -> None:
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
-        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead,
-                         lambda p: threat.get(p, 0) - w_after[p])
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead, margin)
         if step:
             f_steps[(pos, step)] += 1
         goals.setdefault(step or pos, set()).add(task.pos)
+    if SH_IDLE:  # 과제 없는 깃발병은 우리 건물에서 IDLE_KEEP걸음까지 비킨다
+        planned = {pos for pos, _ in t.plan}
+        for pos, _ in t.flags:
+            if pos not in planned:
+                step = idle_step(t, pos, safe)
+                if step:
+                    f_steps[(pos, step)] += 1
     _flag_goal.clear()
     _flag_goal.update(goals)
     t.actions += [Move(src, "F", n, dst) for (src, dst), n in f_steps.items()]
+
+
+def idle_step(t: Turn, pos: Pos, safe: Callable[[Pos], bool]) -> Pos | None:
+    """SH_IDLE: 과제 없는 깃발병의 다음 칸. 우리 건물에서 IDLE_KEEP(공학관·학생회관 1, 나머지 2)걸음까지 물러난다."""
+    near = [b for b in t.world.owned(t.world.me) if manhattan(b.pos, pos) <= IDLE_KEEP_DEFAULT]
+    want = [b for b in near if manhattan(b.pos, pos) < IDLE_KEEP.get(b.kind, IDLE_KEEP_DEFAULT)]
+    if not want:
+        return None
+    best = None
+    for dx, dy in t.order:
+        nxt = (pos[0] + dx, pos[1] + dy)
+        if not t.world.map.passable(nxt) or not safe(nxt):
+            continue
+        gain = min(manhattan(b.pos, nxt) - manhattan(b.pos, pos) for b in want)
+        if gain > 0 and (best is None or t.key(nxt) < t.key(best)):
+            best = nxt
+    return best
 
 
 def set_priority(t: Turn) -> None:
@@ -680,7 +995,15 @@ def remember(world: World) -> None:
         _served.clear()
         _flag_goal.clear()
         _phase.update(name="EXPAND", calm=0)
+        _diversion.update(target=None, since=0, owner=None, banned={})
+        _lost.update(owner={}, turns={})
+        _hunters.update(cells=Counter(), designated=0, formed=False, deaths=0)
     _depots_taken.update(b.id for b in world.owned(world.me, "DEPOT"))
+    if MOBILE:  # 우리가 잃은 건물 (기동대)
+        for b in world.buildings.values():
+            if _lost["owner"].get(b.id) == world.me and b.owner != world.me:
+                _lost["turns"].setdefault(b.id, []).append(world.turn)
+            _lost["owner"][b.id] = b.owner
     _last_owned.update((b.id, world.turn) for b in world.owned(world.me))
     if _dist_cache_rows != [world.map.rows]:
         _dist_cache.clear()
@@ -720,7 +1043,11 @@ def phase_conditions(world: World, pressured: list[tuple[Building, int]]) -> dic
     my_w = sum(n for _, n in world.units_of(me, "W"))
     enemy_w = sum(n for _, n in world.units_of(enemy, "W"))
     hold = world.turn >= LATE_TURN and mine > theirs
+    total = sum(estimated_score(world, b) for b in world.buildings.values())
+    sweep = (bool(SWEEP) and world.turn >= SWEEP_FROM and mine * 2 > total and my_w >= enemy_w + SWEEP_W_MARGIN
+             and 0 < len(world.owned(enemy)) <= SWEEP_ENEMY_MAX)
     return {
+        "SWEEP": sweep,
         "ENDGAME": ENDGAME_TURNS > 0 and world.turn > TOTAL_TURNS - ENDGAME_TURNS,
         "COMEBACK": COMEBACK_TURN > 0 and world.turn >= COMEBACK_TURN and mine < theirs,
         "BEHIND": BEHIND_MARGIN > 0 and enemy_w >= my_w + BEHIND_MARGIN,
@@ -760,6 +1087,7 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
         covered = pulled or b.pos in arrival
         stages = 1 if pulled or b.owner is None else 2
         value = (t.values[b.id]
+                 * (DIVERSION_CAPTURE if t.diversion_ok and t.diversion is b else 1.0)
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
                  * (steal if b.owner is not None else 1.0)
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
@@ -780,7 +1108,7 @@ def flag_guard_tasks(t: Turn) -> list[Task]:
         return []
     tasks = []
     for b in t.world.owned(t.world.me):
-        if b.kind not in ECON_KINDS:
+        if b.kind not in ECON_KINDS and not (FLAG_GUARD_SCORE and estimated_score(t.world, b) >= FLAG_GUARD_SCORE):
             continue
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= FLAG_GUARD for p in t.enemy_flags):
@@ -801,12 +1129,26 @@ def kill_tasks(t: Turn) -> list[Task]:
             if not any(dist.get(p, 99) <= KILL_REACH for p in ours):
                 continue
         bonus = t.values[b.id] if b else 0.0
-        tasks.append(Task("처치", "W", pos, t.threat.get(pos, 0) + 1, KILL_VALUE * n + bonus))
+        if FORECAST_KILL and pos in t.flag_dst:  # 예측한 도착 칸에서 잡는다
+            pos = t.flag_dst[pos]
+        need = t.threat.get(pos, 0) + 1
+        if ASSASSIN_COND and need == 1 and assassin_signal(t, pos, n, bonus):  # 무방비한 깃발병은 가장 가까운 한 명이
+            tasks.append(Task("암살", "W", pos, 1, (KILL_VALUE * n + bonus) * ASSASSIN_BOOST))
+            continue
+        tasks.append(Task("처치", "W", pos, need, KILL_VALUE * n + bonus))
     if INTERCEPT_VALUE > 0:
-        for b in intercept_targets(t).values():
+        for flag, b in intercept_targets(t).items():
             if b.owner == t.world.me and b.pos not in t.enemy_flags:
-                tasks.append(Task("요격", "W", b.pos, t.threat.get(b.pos, 0) + 1, t.values[b.id] * INTERCEPT_VALUE))
+                need = raid_need(t, flag, b) if INTERCEPT_ESCORT else t.threat.get(b.pos, 0) + 1
+                tasks.append(Task("요격", "W", b.pos, need, t.values[b.id] * INTERCEPT_VALUE))
     return tasks
+
+
+def raid_need(t: Turn, flag: Pos, b: Building) -> int:
+    """적 깃발병 `flag`가 노리는 우리 건물 `b`를 지킬 전투병: max(그 칸 다음 턴 위협, 깃발병 칸과 이웃의 적 전투병) + 1.
+    그 칸 위협만 세면 아직 멀리 있는 기습조(깃발병 + 호위)에 한 명만 보내, 도착해서 상쇄로 지고 건물을 내준다."""
+    escort = sum(n for p, n in t.enemy_warriors if manhattan(p, flag) <= 1)
+    return max(t.threat.get(b.pos, 0), escort) + 1
 
 
 def intercept_targets(t: Turn) -> dict[Pos, Building]:
@@ -839,6 +1181,22 @@ def trade_weighted(t: Turn, tasks: list[Task]) -> list[Task]:
     return [replace(task, value=task.value * factor) if task.kind in TRADE_KINDS else task for task in tasks]
 
 
+def cheaper(t: Turn) -> bool:
+    """우리 전투병 값이 상대보다 싼가 (공학관 차이)."""
+    return t.world.warrior_cost(t.world.me) < t.world.warrior_cost(t.world.enemy)
+
+
+def hunt_tasks(t: Turn) -> list[Task]:
+    """소모전(TRADE_HUNT > 0, 우리 값이 더 쌀 때): 적 전투병이 TRADE_HUNT_MIN명 이상 선 칸에 그 칸 다음 턴 위협만큼."""
+    if TRADE_HUNT <= 0 or not cheaper(t):
+        return []
+    world = t.world
+    ours, theirs = world.warrior_cost(world.me), world.warrior_cost(world.enemy)
+    gain = (theirs - ours) / ours
+    return [Task("소모전", "W", pos, max(n, t.threat.get(pos, 0)), TRADE_HUNT * n * gain)
+            for pos, n in t.enemy_warriors if n >= TRADE_HUNT_MIN]
+
+
 def escort_tasks(t: Turn) -> list[Task]:
     """호위: 이번 턴 점령 중인 우리 깃발병. 같은 수만 있어도 상쇄되어 깃발병이 산다.
     ESCORT_VALUE > 0이면 나머지 우리 깃발병(이동 중·대기 중)에도 전투병 1명씩."""
@@ -847,16 +1205,64 @@ def escort_tasks(t: Turn) -> list[Task]:
         b = c.building
         if t.threat.get(b.pos, 0) and b.pos not in t.enemy_flags:
             tasks.append(Task("호위", "W", b.pos, t.threat[b.pos], t.values[b.id]))
-    if ESCORT_VALUE > 0:  # 이동 중 깃발병: 위 호위 과제가 없는 칸마다 전투병 1명
-        covered = {task.pos for task in tasks}
-        tasks += [Task("호위", "W", pos, ESCORT_NEED, ESCORT_VALUE) for pos, _ in t.flags if pos not in covered]
+    if ESCORT_VALUE <= 0:
+        return tasks
+    covered = {task.pos for task in tasks}
+    if not (SH_ESCORT or ESCORT_LEAD or ESCORT_ADAPTIVE):  # 이동 중 깃발병: 위 호위 과제가 없는 칸마다 전투병 1명
+        return tasks + [Task("호위", "W", pos, ESCORT_NEED, ESCORT_VALUE) for pos, _ in t.flags if pos not in covered]
+    size = escort_size(t.world.turn) if SH_ESCORT else ESCORT_NEED
+    if not size:
+        return tasks
+    for pos, task in assign_flags(t.flags, t.f_tasks, t.dist_to, t.deadline):
+        cell = (step_along(pos, t.dist_to(task.pos), t.order) or task.pos) if ESCORT_LEAD else pos
+        if cell in covered:
+            continue
+        need = min(ESCORT_MAX, max(ESCORT_MIN, t.threat.get(cell, 0) + 1)) if ESCORT_ADAPTIVE else size
+        tasks.append(Task("호위", "W", cell, need, ESCORT_VALUE))
+        covered.add(cell)
     return tasks
+
+
+def escort_size(turn: int) -> int:
+    """SH_ESCORT: 이 턴의 이동 중 호위 인원 (20·40·80턴 경계)."""
+    if turn < 20:
+        return SH_ESCORT_T0
+    if turn < 40:
+        return SH_ESCORT_T1
+    if turn < 80:
+        return SH_ESCORT_T2
+    return SH_ESCORT_T3
 
 
 def guard_tasks(t: Turn, weight: float) -> list[Task]:
     """지키기: 적 깃발병이 다가오는 우리 건물 위에 전투병을 세운다(가치 × weight). 올라오는 적 깃발병을
     그 칸에서 잡는다."""
-    return [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
+    tasks = [Task("지키기", "W", b.pos, defend_need(t, b), t.values[b.id] * weight) for b, _ in t.pressured]
+    return tasks + early_guard_tasks(t, weight)
+
+
+def early_guard_tasks(t: Turn, weight: float) -> list[Task]:
+    """선제 수비(EARLY_GUARD > 0): 적 깃발병이 GUARD_RADIUS보다 멀고 EARLY_GUARD걸음 안인 우리 건물 중, 우리 전투병이
+    가장 가까운 적 깃발병보다 EARLY_SLACK턴 이상 먼저 닿지 못하는 곳에 전투병을 미리 세운다(가치 × weight × EARLY_GUARD_WEIGHT).
+    지키기(적 깃발병 GUARD_RADIUS 안)가 이미 있는 건물은 뺀다."""
+    if EARLY_GUARD <= 0 or not t.enemy_flags:
+        return []
+    world = t.world
+    guarded = {b.id for b, _ in t.pressured}
+    ours = [p for p, _ in world.units_of(world.me, "W")]
+    tasks = []
+    for b in world.owned(world.me):
+        if b.id in guarded:
+            continue
+        dist = t.dist_to(b.pos)
+        near = min(((dist[p], t.key(p), p) for p in t.enemy_flags if p in dist), default=None)
+        if near is None or near[0] > EARLY_GUARD:
+            continue
+        mine = min((dist[p] for p in ours if p in dist), default=99)
+        if mine + EARLY_SLACK <= near[0]:  # 우리가 넉넉히 먼저 닿는다 → 아직 과제로 묶지 않는다
+            continue
+        tasks.append(Task("선제 수비", "W", b.pos, raid_need(t, near[2], b), t.values[b.id] * weight * EARLY_GUARD_WEIGHT))
+    return tasks
 
 
 def defend_need(t: Turn, b: Building) -> int:
@@ -945,10 +1351,28 @@ def rush_tasks(t: Turn) -> list[Task]:
     return tasks
 
 
+def sweep_tasks(t: Turn) -> list[Task]:
+    """소탕: 남은 상대 건물마다 전투병 "위협 + SWEEP_EXTRA"명. 필요 인원이 적은 건물부터 넣고, 합이 우리 전투병 × SWEEP_FRAC를
+    넘게 되는 건물은 뺀다(채우지 못하는 건물을 치면 전투병만 잃는다)."""
+    world = t.world
+    my_w = sum(n for _, n in world.units_of(world.me, "W"))
+    cands = sorted(((attack_need(t, b, SWEEP_EXTRA), -t.values[b.id], t.key(b.pos), b) for b in world.owned(world.enemy)),
+                   key=lambda c: c[:3])
+    used, tasks = 0, []
+    for need, _, _, b in cands:
+        if used + need > my_w * SWEEP_FRAC:
+            continue
+        used += need
+        tasks.append(Task("소탕", "W", b.pos, need, t.values[b.id] * SWEEP_WEIGHT))
+    return tasks
+
+
 def attack_need(t: Turn, b: Building, extra: int) -> int:
     """상대 건물 `b`에 들어갈 전투병 수: 그 칸 위협 + `extra`. ATTACK_TIE가 켜져 있고 우리 깃발병이 ATTACK_TIE걸음 안에
     있으면 위협만큼(최소 1): 동수면 서로 상쇄되어 남은 전투병이 없으므로 따라 들어간 우리 깃발병이 살아남아 중립화한다."""
     threat = t.threat.get(b.pos, 0)
+    if TRADE_TIE and cheaper(t):
+        return max(1, threat)
     if ATTACK_TIE > 0:
         dist = t.dist_to(b.pos)
         if any(dist.get(p, 99) <= ATTACK_TIE for p, _ in t.flags):
@@ -995,8 +1419,253 @@ def squad_tasks(t: Turn) -> list[Task]:
             continue
         taken.add(task.building.id)
         cell = step_along(pos, t.dist_to(task.pos), t.order) or pos
-        tasks.append(Task("별동대", "W", cell, SQUAD_SIZE, task.value * SQUAD_WEIGHT))
+        tasks.append(Task("별동대", "W", cell, squad_size(t, cell), task.value * SQUAD_WEIGHT))
     return tasks
+
+
+def squad_size(t: Turn, cell: Pos) -> int:
+    """별동대 인원. SQUAD_FLEX면 그 칸을 노리는 적(다음 턴 위협, SQUAD_REACH걸음 안 적 전투병 중 큰 쪽) + 1을 SQUAD_MIN~SQUAD_MAX로
+    자른다. 아니면 SQUAD_SIZE 고정."""
+    if not SQUAD_FLEX:
+        return SQUAD_SIZE
+    reach = t.dist_to(cell)
+    near = sum(n for p, n in t.enemy_warriors if reach.get(p, 99) <= SQUAD_REACH)
+    return max(SQUAD_MIN, min(SQUAD_MAX, max(t.threat.get(cell, 0), near) + 1))
+
+
+def assassin_signal(t: Turn, cell: Pos, n: int, bonus: float) -> bool:
+    """무방비한 적 깃발병(`cell`)을 우리 전투병 한 명이 혼자 잡을 만한가 (ASSASSIN_COND)."""
+    if any(manhattan(cell, p) <= ASSASSIN_GUARD_R for p, _ in t.enemy_warriors):
+        return False
+    dist = t.dist_to(cell)
+    near = min((dist.get(p, 99) for p, _ in t.world.units_of(t.world.me, "W")), default=99)
+    if near > ASSASSIN_MAX_DIST:
+        return False
+    return (KILL_VALUE * n + bonus + ASSASSIN_EXTRA * n) / (1 + near) >= ASSASSIN_SIGNAL
+
+
+def enemy_defenders(t: Turn, b: Building) -> int:
+    """건물 `b` 주변 DIVERSION_REACH걸음 안의 적 전투병 수."""
+    dist = t.dist_to(b.pos)
+    return sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= DIVERSION_REACH)
+
+
+def diversion_aggro(t: Turn, b: Building) -> int:
+    """건물 `b`를 건드리면 달려올 적 전투병: DIVERSION_AGGRO_MIN_DIST~MAX_DIST걸음 사이."""
+    dist = t.dist_to(b.pos)
+    return sum(n for p, n in t.enemy_warriors if DIVERSION_AGGRO_MIN_DIST <= dist.get(p, 99) <= DIVERSION_AGGRO_MAX_DIST)
+
+
+def diversion_signal(t: Turn, b: Building, defenders: int, nearest: int) -> float:
+    """양동 신호 S (DIVERSION_COND). 가치가 크고 수비가 약하고 가까울수록, 건드리면 달려올 적이 많을수록 크다."""
+    prio = DIVERSION_PRIORITY if b.kind in DIVERSION_PRIORITY_KINDS else 1.0
+    return t.values[b.id] * prio / (1 + defenders) / (2 + nearest) * (1 + min(diversion_aggro(t, b), 12) / 12)
+
+
+def diversion_start(t: Turn, b: Building, defenders: int, nearest: int, ratio: float) -> bool:
+    """이 건물로 양동을 새로 시작해도 되는가. DIVERSION_COND가 꺼져 있으면 늘 참."""
+    if not DIVERSION_COND:
+        return True
+    signal = diversion_signal(t, b, defenders, nearest)
+    tight = DIVERSION_TIGHT_LO <= ratio <= DIVERSION_TIGHT_HI
+    easy = defenders <= DIVERSION_EASY_DEF and diversion_aggro(t, b) >= DIVERSION_AGGRO_MIN
+    if not ((tight and signal >= DIVERSION_SIGNAL_TIGHT) or (easy and signal >= DIVERSION_SIGNAL_EASY)):
+        return False
+    if DIVERSION_EV:
+        p, ev = diversion_ev(t, b)
+        return p >= DIVERSION_P_MIN and ev >= DIVERSION_EV_MIN
+    return True
+
+
+def home_depth(t: Turn, b: Building) -> int:
+    """건물 `b`가 우리 진영 안쪽으로 얼마나 깊은가 = (상대 본진까지 걸음) − (우리 본진까지 걸음). 클수록 상대에게서 멀다."""
+    world = t.world
+    dist = t.dist_to(b.pos)
+    return dist.get(world.map.bases[world.enemy], 99) - dist.get(world.map.bases[world.me], 99)
+
+
+def diversion_ev(t: Turn, b: Building) -> tuple[float, float]:
+    """양동의 (성공 확률 p, 기대값 EV) — DIVERSION_EV 설명."""
+    world = t.world
+    dist = t.dist_to(b.pos)
+    support = sum(n for p, n in world.units_of(world.me, "W") if dist.get(p, 99) <= DIVERSION_FRONT_REACH)
+    rival = sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= DIVERSION_RIVAL_REACH)
+    p = support / (support + rival) if support + rival else 1.0
+    need = max(2, min(DIVERSION_MAX, max(t.threat.get(b.pos, 0), enemy_defenders(t, b)) + DIVERSION_EXTRA))
+    prio = DIVERSION_PRIORITY if b.kind in DIVERSION_PRIORITY_KINDS else 1.0
+    return p, p * t.values[b.id] * prio - (1 - p) * need * DIVERSION_LOSS_PER_W
+
+
+def rush_target(t: Turn, b: Building) -> bool:
+    """러시가 이미 노리는 건물(RUSH_UNTIL턴까지 상대 캠퍼스 쪽 공학관)인가."""
+    world = t.world
+    if b.kind != "ENG" or world.turn > RUSH_UNTIL:
+        return False
+    dist = t.dist_to(b.pos)
+    return dist.get(world.map.bases[world.enemy], 99) < dist.get(world.map.bases[world.me], 99)
+
+
+def diversion_target(t: Turn) -> Building | None:
+    """양동 목표. 후보 = 우리 것이 아니고 러시가 노리지 않는 건물 중, 수비 ≤ DIVERSION_MAX_DEF, 우리 전투병 DIVERSION_FRONT_REACH걸음 안
+    DIVERSION_MIN_SUPPORT명 이상. 신호가 큰 곳을 고르고, 이미 고른 목표는 조건이 유지되는 동안 잡되 DIVERSION_PATIENCE턴 진전(소유자
+    변화)이 없으면 DIVERSION_COOLDOWN턴 접는다. 우리 전투병이 적의 DIVERSION_MIN_RATIO배 미만이면 하지 않는다."""
+    world = t.world
+    st = _diversion
+    if not DIVERSION_FROM or not DIVERSION_FROM <= world.turn <= DIVERSION_UNTIL:
+        return None
+    mine = world.units_of(world.me, "W")
+    mine_n, theirs_n = sum(n for _, n in mine), sum(n for _, n in t.enemy_warriors)
+    if mine_n < DIVERSION_MIN_RATIO * theirs_n:
+        st["target"] = None
+        return None
+    cands = []
+    for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)):
+        if b.owner == world.me or rush_target(t, b) or st["banned"].get(b.id, 0) > world.turn:
+            continue
+        if DIVERSION_SKIP_HOME and MOBILE_DEPTH and home_depth(t, b) >= MOBILE_DEPTH:
+            continue  # 우리 진영 깊은 곳 건물을 되찾는 것은 양동이 아니다
+        dist = t.dist_to(b.pos)
+        if sum(n for p, n in mine if dist.get(p, 99) <= DIVERSION_FRONT_REACH) < DIVERSION_MIN_SUPPORT:
+            continue
+        nearest = min((dist.get(p, 99) for p, _ in mine), default=99)
+        cands.append((enemy_defenders(t, b), nearest, b))
+    ratio = mine_n / max(1, theirs_n)
+    keep = st["target"]
+    if keep is not None:
+        for d, near, b in cands:
+            if b.id == keep and d <= DIVERSION_MAX_DEF + 1 and (
+                    not DIVERSION_COND or diversion_signal(t, b, d, near) >= DIVERSION_SIGNAL_KEEP) and (
+                    not DIVERSION_EV or diversion_ev(t, b)[1] >= DIVERSION_EV_KEEP):
+                if b.owner != st["owner"]:
+                    st.update(since=world.turn, owner=b.owner)  # 소유자가 바뀌었다 = 진전
+                elif world.turn - st["since"] >= DIVERSION_PATIENCE:
+                    st["banned"][b.id] = world.turn + DIVERSION_COOLDOWN
+                    st["target"] = None
+                    break
+                return b
+        else:
+            st["target"] = None
+    opened = [(-diversion_signal(t, b, d, near), t.key(b.pos), b) for d, near, b in cands
+              if d <= DIVERSION_MAX_DEF and b.id != st["target"] and diversion_start(t, b, d, near, ratio)]
+    if not opened:
+        return None
+    target = min(opened, key=lambda c: c[:2])[2]
+    st.update(target=target.id, since=world.turn, owner=target.owner)
+    return target
+
+
+def diversion_tasks(t: Turn) -> list[Task]:
+    """양동 과제: 목표 건물에 전투병 (수비 + DIVERSION_EXTRA)명(2~DIVERSION_MAX). 깃발병은 점령 가치 배율로 따라온다."""
+    b = t.diversion
+    if b is None:
+        return []
+    need = max(2, min(DIVERSION_MAX, max(t.threat.get(b.pos, 0), enemy_defenders(t, b)) + DIVERSION_EXTRA))
+    return [Task("양동", "W", b.pos, need, DIVERSION_VALUE)]
+
+
+def mobile_tasks(t: Turn) -> list[Task]:
+    """기동대 (MOBILE 설명)."""
+    if not MOBILE:
+        return []
+    world = t.world
+    away = world.map.bases[world.enemy]
+    tasks = []
+    for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)):
+        turns = _lost["turns"].get(b.id)
+        if not turns:
+            continue
+        if MOBILE_DEPTH:
+            if home_depth(t, b) < MOBILE_DEPTH:
+                continue
+        elif t.dist_to(b.pos).get(away, 0) < MOBILE_ENEMY_DIST:
+            continue
+        recent = [x for x in turns if world.turn - x <= MOBILE_WINDOW]
+        if len(recent) >= MOBILE_FLIPS and world.turn - turns[-1] <= MOBILE_CALM:
+            tasks.append(Task("기동대", "W", b.pos, MOBILE_SIZE, t.values[b.id] * MOBILE_WEIGHT))
+    return tasks
+
+
+def hunters_update(world: World) -> None:
+    """사냥꾼이 살아 있는지 본다: 기억한 칸마다 우리 전투병 수와 견줘 줄었으면 죽은 것으로 센다(유닛에 ID가 없어 칸으로 추적)."""
+    h = _hunters
+    if not HUNTERS or not h["cells"]:
+        return
+    alive = dict(world.units_of(world.me, "W"))
+    for pos, n in list(h["cells"].items()):
+        have = min(n, alive.get(pos, 0))
+        if have < n:
+            h["deaths"] += n - have
+        if have:
+            h["cells"][pos] = have
+        else:
+            del h["cells"][pos]
+
+
+def hunters_plan(t: Turn, warriors: list[tuple[Pos, int]]) -> list[tuple[Pos, int]]:
+    """사냥꾼 조를 전투병 풀에서 빼고 이번 턴 움직임을 정한다. 형성 기간에는 새로 만든 전투병을 뽑아 생산 칸에서 모은다."""
+    h, world = _hunters, t.world
+    if world.turn <= HUNTERS_FORM_UNTIL and h["designated"] < HUNTERS_SIZE and t.make_w:
+        take = min(t.make_w, HUNTERS_SIZE - h["designated"])
+        h["cells"][t.w_site] += take
+        h["designated"] += take
+    if not h["cells"]:
+        return warriors
+    pool = Counter(dict(warriors))
+    total = sum(h["cells"].values())
+    if not h["formed"] and total < HUNTERS_SIZE and world.turn < HUNTERS_FORM_UNTIL:
+        for pos, n in h["cells"].items():  # 아직 모으는 중: 제자리
+            pool[pos] -= n
+        t.hunter_stay = dict(h["cells"])
+        return sorted(((p, n) for p, n in pool.items() if n > 0), key=lambda item: t.key(item[0]))
+    h["formed"] = True
+    pos, n = max(h["cells"].items(), key=lambda kv: kv[1])  # 흩어졌으면 가장 큰 무리만 남긴다
+    h["cells"] = Counter({pos: n})
+    pool[pos] -= n
+    dst = hunters_step(t, pos, n)
+    h["cells"] = Counter({dst: n})
+    t.hunter_move = (pos, dst, n)
+    return sorted(((p, m) for p, m in pool.items() if m > 0), key=lambda item: t.key(item[0]))
+
+
+def hunters_step(t: Turn, pos: Pos, n: int) -> Pos:
+    """사냥꾼 무리(`n`명)의 다음 칸(제자리 포함). 죽지 않는 것이 먼저: 적 위협이 n − HUNTERS_MARGIN 이하인 칸만 밟는다."""
+    world = t.world
+    x, y = pos
+    cells = [pos] + [(x + dx, y + dy) for dx, dy in t.order if world.map.passable((x + dx, y + dy))]
+    home = t.dist_to(world.map.bases[world.me])
+    safe = [c for c in cells if t.threat.get(c, 0) <= n - HUNTERS_MARGIN]
+    if not safe:  # 어디든 위험하면 위협이 가장 낮은 칸, 같으면 우리 본진 쪽
+        return min(cells, key=lambda c: (t.threat.get(c, 0), home.get(c, 99), c != pos))
+    # 1) 무방비한 적 깃발병
+    free = []
+    for fp, fn in t.enemy_flags.items():
+        if any(manhattan(fp, p) <= HUNTERS_GUARD_R for p, _ in t.enemy_warriors) or t.threat.get(fp, 0) > n - HUNTERS_MARGIN:
+            continue
+        d = t.dist_to(fp).get(pos)
+        if d is None:
+            continue
+        b = world.building_at(fp)
+        free.append((-((t.values[b.id] if b else 0.0) + 1.0 + HUNTERS_FLAG_EXTRA) * fn / (1 + d), t.key(fp), fp))
+    if free:
+        dist = t.dist_to(min(free)[2])
+        return min(safe, key=lambda c: (dist.get(c, 99), c != pos, t.key(c)))
+    # 2) 미끼: 양동 목표의 수비대, 없으면 상대 공학관·학생회관 근처를 지키는 무리
+    anchors = [t.diversion.pos] if t.diversion is not None else [
+        b.pos for b in world.buildings.values() if b.kind in ("ENG", "HALL") and b.owner != world.me
+        and home_depth(t, b) < MOBILE_DEPTH]
+    best = None
+    for sp, m in t.enemy_warriors:
+        near_anchor = any(manhattan(sp, a) <= 3 for a in anchors)
+        d = t.dist_to(sp).get(pos)
+        if d is None:
+            continue
+        score = m * (3 if near_anchor else 1) / (1 + d)
+        if best is None or score > best[0]:
+            best = (score, sp)
+    if best is None:
+        return pos
+    dist = t.dist_to(best[1])
+    return min(safe, key=lambda c: (abs(dist.get(c, 99) - HUNTERS_KITE), c != pos, t.key(c)))
 
 
 def recently_lost(t: Turn, b: Building) -> bool:
@@ -1012,87 +1681,6 @@ def retake_tasks(t: Turn) -> list[Task]:
         return []
     return [Task("탈환", "W", b.pos, t.threat.get(b.pos, 0) + RETAKE_EXTRA, RETAKE_VALUE)
             for b in t.others if recently_lost(t, b)]
-
-
-def line_tasks(t: Turn) -> list[Task]:
-    """전선 유지: LINE_UNTIL턴까지, 우리 건물이 LINE_BUILDINGS개 미만이면 우리 캠퍼스 LINE_KINDS 건물(우리 본진이 더 가까운 것)
-    앞 길목 칸(line_cells)마다 전투병 "LINE_REACH걸음 안 적 전투병 + 1 + LINE_EXTRA"명."""
-    world = t.world
-    if world.turn > LINE_UNTIL or len(world.owned(world.me)) >= LINE_BUILDINGS:
-        return []
-    home, away = world.map.bases[world.me], world.map.bases[world.enemy]
-    tasks = []
-    for b in sorted((b for b in world.owned(world.me) if b.kind in LINE_KINDS), key=lambda b: t.key(b.pos)):
-        dist = t.dist_to(b.pos)
-        if dist.get(home, 99) >= dist.get(away, 99):
-            continue
-        for cell in line_cells(t, b.pos):
-            near = t.dist_to(cell)
-            need = sum(n for p, n in t.enemy_warriors if near.get(p, 99) <= LINE_REACH) + 1 + LINE_EXTRA
-            tasks.append(Task("전선 유지", "W", cell, need, t.values[b.id] * LINE_WEIGHT))
-    return tasks
-
-
-def line_cells(t: Turn, pos: Pos) -> list[Pos]:
-    """건물 `pos`의 길목 칸들. LINE_PATHS가 1이면 line_cell 한 칸, 아니면 적 본진 → `pos` 최단 경로들이 지나는 칸 중 `pos`에서
-    LINE_DEPTH걸음인 칸을 정규화 좌표 순으로 LINE_PATHS개까지."""
-    if LINE_PATHS <= 1:
-        cell = line_cell(t, pos)
-        return [] if cell is None else [cell]
-    dist, from_away = t.dist_to(pos), t.dist_to(t.world.map.bases[t.world.enemy])
-    total = from_away.get(pos)
-    if total is None:
-        return []
-    cells = [c for c, d in dist.items() if d == LINE_DEPTH and from_away.get(c, 99) + LINE_DEPTH == total]
-    return sorted(cells, key=t.key)[:LINE_PATHS]
-
-
-def spear_tasks(t: Turn) -> list[Task]:
-    """창: SPEAR_FROM~SPEAR_UNTIL턴, 우리 본진 → 적 본진 직선(최단 경로)에서 SPEAR_WIDTH걸음 이내로 벗어난 건물 중 우리 것이 아닌
-    가장 가까운(우리 본진에서) 건물 하나에 전투병 "위협 + SPEAR_EXTRA"명."""
-    world = t.world
-    if SPEAR_FROM <= 0 or not SPEAR_FROM <= world.turn <= SPEAR_UNTIL:
-        return []
-    home, away = world.map.bases[world.me], world.map.bases[world.enemy]
-    straight = t.dist_to(away).get(home)
-    if straight is None:
-        return []
-    best = None
-    for b in world.buildings.values():
-        if b.owner == world.me:
-            continue
-        dist = t.dist_to(b.pos)
-        dh, da = dist.get(home), dist.get(away)
-        if dh is None or da is None or dh + da - straight > SPEAR_WIDTH:
-            continue
-        cand = (dh, t.key(b.pos), b)
-        best = cand if best is None or cand[:2] < best[:2] else best
-    if best is None:
-        return []
-    b = best[2]
-    return [Task("창", "W", b.pos, t.threat.get(b.pos, 0) + SPEAR_EXTRA, SPEAR_VALUE)]
-
-
-def rescue_tasks(t: Turn) -> list[Task]:
-    """구조: 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "위협 + 1"명 (RESCUE_VALUE > 0일 때)."""
-    if RESCUE_VALUE <= 0:
-        return []
-    return [Task("구조", "W", pos, t.threat[pos] + 1, RESCUE_VALUE * n)
-            for pos, n in t.flags if t.threat.get(pos, 0)]
-
-
-def line_cell(t: Turn, eng: Pos) -> Pos | None:
-    """적 본진에서 `eng`까지 최단 경로 위, `eng`에서 LINE_DEPTH걸음 떨어진 칸. 경로가 그보다 짧으면 적 본진 칸, 없으면 None."""
-    dist = t.dist_to(eng)
-    pos: Pos | None = t.world.map.bases[t.world.enemy]
-    if pos not in dist:
-        return None
-    while dist[pos] > LINE_DEPTH:
-        nxt = step_along(pos, dist, t.order)
-        if nxt is None:
-            break
-        pos = nxt
-    return pos
 
 
 def eng_focus_tasks(t: Turn) -> list[Task]:
@@ -1144,8 +1732,11 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     world = t.world
     if sum(n for _, n in world.units_of(world.me, "W")) < sum(n for _, n in t.enemy_warriors) + RAID_SURPLUS:
         return []
+    their_stations = len(world.owned(world.enemy, "STATION"))
+    station_raid = their_stations == 2 if STATION_RAID == 2 else (STATION_RAID and their_stations >= 2)
+    kinds = RAID_KINDS | ({"STATION"} if station_raid else set())
     return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight)
-            for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in RAID_KINDS]
+            for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in kinds]
 
 
 # ------------------------------------------------------------------ 깃발병
@@ -1192,11 +1783,11 @@ class FlagMove:
     def __init__(
         self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
         safe: Callable[[Pos], bool], hold: bool, ahead: Callable[[Pos], bool] | None = None,
-        danger: Callable[[Pos], int] | None = None,
+        margin: Callable[[Pos], int] | None = None,
     ) -> None:
         self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
-        self.danger = danger  # 칸의 (적 위협 − 우리 전투병). FLAG_ESCAPE에 쓴다
         self.ahead = ahead or safe  # 목표 쪽으로 나아갈 칸의 판단 (기본 = 안전)
+        self.margin = margin  # 칸의 열세 (FLAG_ESCAPE)
         self.here = dist.get(pos)
         neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
         self.neighbors = [n for n in neighbors if n in dist]
@@ -1215,13 +1806,17 @@ class FlagMove:
         return True
 
     def escape(self) -> bool:
-        """FLAG_ESCAPE: 제자리와 들어갈 수 있는 이웃 중 (적 위협 − 우리 전투병)이 가장 작은 칸, 같으면 목표에 가까운 칸."""
-        if not FLAG_ESCAPE or self.danger is None:
+        """FLAG_ESCAPE: 포위됐을 때 열세가 가장 작은 칸으로 (같으면 목표에 가까운 칸, 2면 제자리도 후보). 제자리를 고르면 step = None."""
+        if not FLAG_ESCAPE or self.margin is None:
             return False
-        cells = [self.pos] + [n for n in self.neighbors if self.enterable(n)]
-        best = min(cells, key=lambda c: (self.danger(c), self.dist.get(c, 99)))
-        if best != self.pos:
-            self.step = best
+        cands = [n for n in self.neighbors if self.enterable(n)] + ([self.pos] if FLAG_ESCAPE == 2 else [])
+        if not cands:
+            return False
+        best = min(cands, key=lambda n: (self.margin(n), self.dist[n]))
+        forward = next((n for n in self.closer if self.enterable(n)), None)
+        if forward is not None and self.margin(forward) - self.margin(best) < FLAG_ESCAPE_GAIN:
+            best = forward  # 목표 쪽 칸보다 열세가 FLAG_ESCAPE_GAIN 이상 줄지 않으면 그대로 나아간다
+        self.step = None if best == self.pos else best
         return True
 
 
@@ -1233,15 +1828,14 @@ def flag_step(
     safe: Callable[[Pos], bool],
     hold: bool,
     ahead: Callable[[Pos], bool] | None = None,
-    danger: Callable[[Pos], int] | None = None,
+    margin: Callable[[Pos], int] | None = None,
 ) -> Pos | None:
     """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
-    피한다 → (FLAG_ESCAPE면 가장 덜 위험한 칸으로) → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지
-    않고 앞에서 기다린다.
+    피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
     """
-    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, danger)
+    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, margin)
     FLAG_TREE.tick(m)
     return m.step
 
@@ -1376,13 +1970,74 @@ def estimated_score(world: World, b: Building) -> float:
 def building_value(world: World, b: Building) -> float:
     """건물 하나의 가치(점수 단위) = 추정 점수 + 기능 가치."""
     score = estimated_score(world, b)
-    if b.kind == "HALL":
+    step = world.turn // 5
+    if b.kind == "HALL" and SH_HALL_DECAY:
+        bonus = max(1.8, 3.6 - 0.2 * step) * HALL_VALUE_PER_TURN / HALL_VALUE_REF
+    elif b.kind == "HALL":
         bonus = HALL_VALUE_PER_TURN * max(0, TOTAL_TURNS - world.turn)
+    elif b.kind == "ENG" and SH_ENG_DECAY:
+        bonus = max(2.0, 3.0 - 0.2 * step) * FUNCTION_VALUE["ENG"] / ENG_VALUE_REF
     elif b.kind == "DEPOT":
         bonus = 0.0 if b.id in _depots_taken else DEPOT_VALUE
+    elif b.kind == "STATION" and SH_STATION:
+        bonus = station_value(world, b)
+    elif b.kind == "HOSPITAL" and HOSPITAL_ISOLATED > 0 and isolated_hospital(world, b):
+        bonus = HOSPITAL_ISOLATED
     else:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
+    if b.kind == "STATION" and STATION_DENY > 0:
+        bonus += station_deny(world, b)
     return score + bonus
+
+
+def station_deny(world: World, b: Building) -> float:
+    """역 차단(STATION_DENY): 상대 순간이동망(역 2개 이상)을 끊는 가치. 상대 역이 n개면 그 역마다 STATION_DENY / (n − 1),
+    상대 역이 1개면 그 역과 STATION_MIN_LINK걸음 이상 떨어진 중립 역에 STATION_DENY × STATION_DENY_PRE."""
+    theirs = [s for s in world.owned(world.enemy, "STATION")]
+    if b.owner == world.enemy and len(theirs) >= 2:
+        return STATION_DENY / (len(theirs) - 1)
+    if (b.owner is None and STATION_DENY_PRE > 0 and len(theirs) == 1
+            and manhattan(b.pos, theirs[0].pos) >= STATION_MIN_LINK):
+        return STATION_DENY * STATION_DENY_PRE
+    return 0.0
+
+
+def station_value(world: World, b: Building) -> float:
+    """역의 기능 가치(SH_STATION). 순간이동은 우리 역이 2개 이상이라야 열리므로, 쓸 만큼 떨어진(STATION_MIN_LINK걸음 이상)
+    다른 역이 없으면 0, 그런 역 중 우리 것이 없으면 STATION_FIRST, 하나면 짝을 완성하므로 STATION_BASE + 가장 연계되는 역
+    주변 가치, 둘 이상이면 STATION_EXTRA. 우리가 이미 가진 역에도 같은 값이 나온다(잃으면 짝이 깨진다)."""
+    linked = [s for s in world.buildings.values()
+              if s.kind == "STATION" and s.id != b.id and manhattan(b.pos, s.pos) >= STATION_MIN_LINK]
+    if not linked:
+        return 0.0
+    mine = [s for s in linked if s.owner == world.me]
+    if not mine:
+        return STATION_FIRST
+    if STATION_V3:  # 전진 거점(이 역 자신의 주변 포함) + 아끼는 걸음 + 근처 우리 경제 건물 수비
+        dest = max([station_neighbors(world, b)] + [station_neighbors(world, s) for s in linked])
+        span = max(manhattan(b.pos, s.pos) for s in linked)
+        saved = STATION_LINK_GAIN * max(0, min(6, span - STATION_MIN_LINK)) / 6
+        guard = STATION_DEFENSE * sum(1 for o in world.buildings.values()
+                                      if o.owner == world.me and o.kind in ("ENG", "HALL")
+                                      and manhattan(o.pos, b.pos) <= STATION_NEIGHBOR)
+        return (STATION_EXTRA if len(mine) > 1 else STATION_BASE + dest) + saved + guard
+    if len(mine) > 1:
+        return STATION_EXTRA
+    return STATION_BASE + max(station_neighbors(world, s) for s in linked)
+
+
+def station_neighbors(world: World, s: Building) -> float:
+    """역 `s` 주변 STATION_NEIGHBOR걸음 안의 건물 가치 합 (병원 제외 — 역이 있으면 병원을 쓸 이유가 없다)."""
+    return sum(STATION_NEIGHBOR_VALUE.get(o.kind, 0.0) for o in world.buildings.values()
+               if o.id != s.id and manhattan(o.pos, s.pos) <= STATION_NEIGHBOR)
+
+
+def isolated_hospital(world: World, b: Building) -> bool:
+    """본진에서도, 어느 역에서도 HOSPITAL_ALONE_DIST걸음 밖에 떨어진 병원인가."""
+    if manhattan(b.pos, world.map.bases[world.me]) <= HOSPITAL_ALONE_DIST:
+        return False
+    return all(manhattan(b.pos, s.pos) > HOSPITAL_ALONE_DIST
+               for s in world.buildings.values() if s.kind == "STATION")
 
 
 def is_center(world: World, b: Building) -> bool:
@@ -1501,20 +2156,6 @@ def retake() -> Node:
     return enable(f"탈환 과제: {RETAKE_MEMORY}턴 안에 잃은 우리 공학관 (RETAKE_VALUE > 0일 때)", "W", retake_tasks)
 
 
-def hold_line() -> Node:
-    return enable(f"전선 유지 과제: LINE_UNTIL턴까지 우리 공학관 {LINE_DEPTH}걸음 앞 길목에 전투병 (근처 적 + 1명)",
-                  "W", line_tasks)
-
-
-def spear() -> Node:
-    return enable("창 과제: SPEAR_FROM~SPEAR_UNTIL턴 우리 본진 → 적 본진 직선 위의 가장 가까운 남의 건물에 전투병 한 덩어리",
-                  "W", spear_tasks)
-
-
-def rescue() -> Node:
-    return enable("구조 과제: 적 위협이 있는 칸의 우리 깃발병에 전투병 위협 + 1명 (RESCUE_VALUE > 0일 때)", "W", rescue_tasks)
-
-
 def eng_focus() -> Node:
     def on(t: Turn) -> None:
         t.eng_focus = True
@@ -1533,6 +2174,21 @@ def final_guard() -> Node:
     return enable(f"막판 수비 과제: 남은 턴 안에 적 깃발병이 닿는 우리 건물 (점수 ×{FINAL_GUARD_WEIGHT:g})", "W", final_guard_tasks)
 
 
+def diversion() -> Node:
+    def on(t: Turn) -> None:
+        t.diversion_ok = True
+        t.makers["W"].append(diversion_tasks)
+    return Act("양동 과제: 전선 가까이 수비가 약한 건물 하나에 전투병 (DIVERSION_FROM > 0일 때)", on)
+
+
+def sweep() -> Node:
+    return enable("소탕 과제: 남은 상대 건물마다 전투병 위협 + SWEEP_EXTRA명 (SWEEP일 때)", "W", sweep_tasks)
+
+
+def mobile() -> Node:
+    return enable("기동대 과제: 우리 진영 깊은 곳 건물을 자주 잃으면 전담 전투병 (MOBILE일 때)", "W", mobile_tasks)
+
+
 def warriors(extra: int) -> Node:
     return Act(f"전투병 목표 인원 = 적 전투병 + {extra}", lambda t: setattr(t, "extra_warriors", extra))
 
@@ -1540,36 +2196,40 @@ def warriors(extra: int) -> Node:
 PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
+        "SWEEP", "우리 점수가 과반이고 상대 건물이 SWEEP_ENEMY_MAX곳 이하 (SWEEP일 때)",
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), sweep(), retake(), warriors(1),
+    ),
+    phase_branch(
         "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
-        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(THREAT_EXTRA),
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
     ),
     phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), spear(), rescue(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(THREAT_EXTRA),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
-        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), spear(), rescue(), warriors(1),
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(1),
     ),
 )
 
@@ -1606,7 +2266,7 @@ FLAG_TREE = Selector(
     Sequence("대기", Condition("지금 칸이 안전", lambda m: m.safe(m.pos)), Act("제자리", lambda m: None)),
     Act("가장 목표에 가까운 안전한 이웃으로 피하기", lambda m: m.go(min(
         (n for n in m.neighbors if m.safe(n)), key=lambda n: m.dist[n], default=None))),
-    Act("가장 덜 위험한 칸으로 (FLAG_ESCAPE일 때)", lambda m: m.escape()),
+    Act("포위되면 열세가 가장 작은 칸으로 (FLAG_ESCAPE)", lambda m: m.escape()),
     Act("위험해도 목표 쪽으로", lambda m: m.go(
         m.closer[0] if m.closer and m.enterable(m.closer[0]) else None)),
     Act("제자리", lambda m: None),

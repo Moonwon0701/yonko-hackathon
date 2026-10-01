@@ -86,6 +86,16 @@ POOLS = {
         "daa1888": ("git:daa1888", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "hyunjin_latest": {  # 현진 테마 브랜치 봇(= 0a15a9e: 10/1 08:00 제출본 ee4ea4b + 포위 탈출) 위에서 이어 학습. 주 상대 = 그 봇
+        # 자신, 그다음 서버 강팀 스타일 strong_wide와 제출본 ee4ea4b. 나머지는 퇴보 방지용
+        "0a15a9e": ("git:0a15a9e", 4),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "ee4ea4b": ("git:ee4ea4b", 2),
+        "337ab49": ("git:337ab49", 1),
+        "26fa986": ("git:26fa986", 1),
+        "daa1888": ("git:daa1888", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
     "unitops": {  # experiments/learned_uo (moonwon/unit-ops daa1888 기반). 흉내 봇은 과적합이 커서 하나만
         "daa1888": ("git:daa1888", 4),
         "7941b88": ("git:7941b88", 2),

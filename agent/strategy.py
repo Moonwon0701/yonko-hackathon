@@ -253,6 +253,12 @@ COMEBACK_TURN = 0
 # ×2는 57.3%, 위험 감수 0.8을 더해도 58.6%로 같음
 OPENING_TURNS = 30
 OPENING_NEUTRAL = 1.5
+# 확보한 상대 건물: 우리 전투병이 그 칸에 서 있고 적 전투병이 닿지 않는 상대 건물의 점령 가치 × SECURED_CAPTURE (0 = 끔).
+# 10/1 17:00 너구리전: 상대 역 (1,12)(1점)에 우리 초소 전투병이 35~160턴 혼자 서 있었는데, 점령 가치가 목표 중 꼴찌
+# (0.7~0.8)라 깃발병을 한 번도 보내지 않았다
+SECURED_CAPTURE = 0.0
+# 확보한 상대 건물이 있으면 깃발병 최소 인원 + SECURED_FLAG (0 = 끔). 가치만 올리면 3~4명뿐인 깃발병을 다른 목표에서 빼 온다
+SECURED_FLAG = 0
 # 위협 대응 가지의 가중치 (31턴 뒤 턴의 97~100%가 이 가지라 사실상 봇 전체의 가중치)
 THREAT_GUARD = 2.0
 THREAT_EXTRA = 2
@@ -800,7 +806,7 @@ def produce(t: Turn) -> None:
     # 건물이 밀리면 최소 인원을 늘린다: 적 전투병이 훨씬 많으면 전투병 목표를 끝내 못 채워, 깃발병이 최소 인원에
     # 묶인 채 건물을 되찾지 못했다(9/28 리더보드 패배 28·29: 20턴 이후 깃발병 2명 이하 81·75턴)
     behind = len(world.owned(world.enemy)) > len(world.owned(me))
-    min_f = MIN_FLAGS + (BEHIND_EXTRA_FLAGS if behind else 0)
+    min_f = MIN_FLAGS + (BEHIND_EXTRA_FLAGS if behind else 0) + (SECURED_FLAG if SECURED_FLAG and secured(t) else 0)
     make_f = min(want_f, max(0, min_f - nf), budget // fc)
     budget -= make_f * fc
     make_w = min(max(0, want_w - nw), budget // wc)
@@ -829,6 +835,12 @@ def produce(t: Turn) -> None:
         t.actions.append(Spawn("W", make_w, None if t.w_site == sites[0] else t.w_site))
     if make_f:
         t.actions.append(Spawn("F", make_f, None if t.f_site == sites[0] else t.f_site))
+
+
+def secured(t: Turn) -> bool:
+    """우리 전투병이 서 있고 적 전투병이 닿지 않는 상대 건물이 있는가."""
+    mine_w = {pos for pos, _ in t.world.units_of(t.world.me, "W")}
+    return any(b.pos in mine_w and not t.threat.get(b.pos, 0) for b in t.others)
 
 
 def eng_coming(t: Turn) -> bool:
@@ -1127,6 +1139,7 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     """
     tasks = []
     arrival = getattr(t, "arrival", {})  # 전투병이 가는 칸 (깃발병 2차에서만 있다)
+    mine_w = {pos for pos, _ in t.world.units_of(t.world.me, "W")}
     for b in t.targets:
         if b.kind == "PLAZA" and t.world.turn < SH_PLAZA_SKIP:
             continue
@@ -1142,6 +1155,8 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
                  * (RETAKE_CAPTURE if RETAKE_VALUE > 0 and recently_lost(t, b) else 1.0)
                  * (DEFICIT_CAPTURE if b.kind == "ENG" and getattr(t, "eng_focus", False) else 1.0)
                  * (OPENING_NEUTRAL if b.owner is None and t.world.turn <= OPENING_TURNS else 1.0)
+                 * (SECURED_CAPTURE if SECURED_CAPTURE > 0 and b.owner == t.world.enemy and b.pos in mine_w
+                    and not t.threat.get(b.pos, 0) else 1.0)
                  * (SH_COST_BASE / (SH_COST_BASE + t.world.stage_cost(b) * stages) if SH_COST_BASE > 0 else 1.0))
         tasks.append(Task("점령", "F", b.pos, 1, value, b, stages))
     return tasks + flag_guard_tasks(t)

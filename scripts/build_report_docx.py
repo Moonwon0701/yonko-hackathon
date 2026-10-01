@@ -260,7 +260,7 @@ def build(out_path: Path) -> None:
 
     # 5. 소감
     bl = section(secs, "5.")
-    parts += [h_feel, para("[각자 고쳐 쓸 것]"), body_xml(bl), page_break]
+    parts += [h_feel, body_xml(bl), page_break]
 
     # 부록
     bl = section(secs, "부록")

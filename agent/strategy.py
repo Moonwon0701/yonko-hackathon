@@ -412,7 +412,7 @@ SQUAD_REACH = 2
 # 다른 건물도 된다. DIVERSION_PATIENCE턴 동안 소유자가 안 바뀌면 DIVERSION_COOLDOWN턴 접고, 우리 전투병이 적의 DIVERSION_MIN_RATIO배
 # 미만이면 하지 않는다. 상대 병력을 전선에서 분산시키는 것이 목적이다
 DIVERSION_FROM = 24
-DIVERSION_UNTIL = 120
+DIVERSION_UNTIL = 150
 DIVERSION_PRIORITY_KINDS = {"HALL", "ENG"}
 DIVERSION_PRIORITY = 1.5
 DIVERSION_REACH = 2
@@ -439,6 +439,12 @@ DIVERSION_EASY_DEF = 1
 DIVERSION_AGGRO_MIN = 6
 DIVERSION_AGGRO_MIN_DIST = 3
 DIVERSION_AGGRO_MAX_DIST = 7
+# 먼 양동(성혁 10/1 22:20): DIVERSION_FAR_MIN > 0이면 우리 최대 전투병 무리(가장 많은 칸)에서 이만큼 이상 떨어진 건물만 양동 후보로
+# 삼는다(0 = 끔). 지금 양동은 주력 5걸음 안 4명 이상인 곳만 노려 상대 주력도 곁에 있다 — 먼 곳을 찔러 상대 주력을 끌어내려는 것.
+# 먼 곳에는 지원 병력이 없으므로 DIVERSION_MIN_SUPPORT도 함께 낮춰 쓴다
+# 대 ee4ea4b(몰수 판 제외 같은 시드 짝 비교): 시드 96000번대 250판 6걸음·지원 0 +6.8%p ±7.6, 97000번대 200판 −2.6%p ±8.8 → 합 450판
+# +2.7%p ±5.7. 같은 묶음 양동 끔 ±0.0, DIVERSION_UNTIL 150 +4.8 ±5.5(250판), DIVERSION_MAX 8 ±0.0, 먼 양동 + 150턴 −9.3%p → 끈 채 남김
+DIVERSION_FAR_MIN = 0
 _diversion: dict = {"target": None, "since": 0, "owner": None, "banned": {}}
 # 조건부 암살: 무방비한 적 깃발병(그 칸 위협 0이고 ASSASSIN_GUARD_R걸음 안에 적 전투병 없음)을, 신호 (KILL_VALUE × n + 건물 가치 +
 # ASSASSIN_EXTRA × n) / (1 + 가장 가까운 우리 전투병 거리) ≥ ASSASSIN_SIGNAL이고 거리 ≤ ASSASSIN_MAX_DIST일 때 가장 가까운 한 명이
@@ -488,6 +494,9 @@ FLAG_ESCAPE_GAIN = 0
 # 광장 미루기를 20턴으로 줄이면 대 ee4ea4b 66.5%로 나빠짐 → 130턴 · +8을 켬
 PLAZA_LATE_TURN = 130
 PLAZA_LATE_BONUS = 8.0
+# 막판 중앙: PLAZA_LATE_TURN턴부터 광장 말고 중앙 건물(is_center)에도 가치 LATE_CENTER_BONUS를 더한다(0 = 끔)
+# 시드 90000번대 165판(대 ee4ea4b, 몰수 0): +4는 −7.3%p ±7.1 → 끈 채 남김. 같은 묶음 광장 시작 120턴 −3.6, 140턴 −1.8, 가산 +12 +1.8%p
+LATE_CENTER_BONUS = 0.0
 # 학생회관 조기 경보: 진 22판은 1~80턴 우리 학생회관 0.76개 대 상대 1.02개(이긴 판 1.05 : 0.78). 공학관 조기 경보(ENG_WATCH)와
 # 같은 방식으로 HALL_WATCH_UNTIL턴까지 우리 학생회관 HALL_WATCH_REACH걸음 안에 적 전투병이 오면 몰아내기 과제를 낸다(0 = 끔).
 # 공학관이 먼저이도록 과제 가치는 × HALL_WATCH_WEIGHT(< 1). 대 ee4ea4b 200판 72.2 → 4걸음·0.7 69.5, 5걸음·1 67.0% → 끈 채 남김
@@ -1570,6 +1579,7 @@ def diversion_target(t: Turn) -> Building | None:
     if mine_n < DIVERSION_MIN_RATIO * theirs_n:
         st["target"] = None
         return None
+    main_pos = max(mine, key=lambda u: (u[1], t.key(u[0])))[0] if DIVERSION_FAR_MIN and mine else None
     cands = []
     for b in sorted(world.buildings.values(), key=lambda b: t.key(b.pos)):
         if b.owner == world.me or rush_target(t, b) or st["banned"].get(b.id, 0) > world.turn:
@@ -1579,6 +1589,8 @@ def diversion_target(t: Turn) -> Building | None:
         dist = t.dist_to(b.pos)
         if sum(n for p, n in mine if dist.get(p, 99) <= DIVERSION_FRONT_REACH) < DIVERSION_MIN_SUPPORT:
             continue
+        if DIVERSION_FAR_MIN and main_pos is not None and dist.get(main_pos, 99) < DIVERSION_FAR_MIN:
+            continue  # 주력 곁은 양동이 아니라 전선이다
         nearest = min((dist.get(p, 99) for p, _ in mine), default=99)
         cands.append((enemy_defenders(t, b), nearest, b))
     ratio = mine_n / max(1, theirs_n)
@@ -2075,6 +2087,8 @@ def building_value(world: World, b: Building) -> float:
         bonus += station_deny(world, b)
     if b.kind == "PLAZA" and PLAZA_LATE_TURN and world.turn >= PLAZA_LATE_TURN:
         bonus += PLAZA_LATE_BONUS
+    elif LATE_CENTER_BONUS and PLAZA_LATE_TURN and world.turn >= PLAZA_LATE_TURN and is_center(world, b):
+        bonus += LATE_CENTER_BONUS
     return score + bonus
 
 

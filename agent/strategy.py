@@ -467,6 +467,26 @@ FLAG_ESCAPE = 1
 # 목표 쪽 칸보다 열세가 이만큼 이상 작은 칸이 있을 때만 피한다(0 = 조금이라도 작으면 피함). 시드 65000번대 400판: 0 · 1(열세가 정수라
 # 0과 같음) 대 ee4ea4b 68.6%, 2 64.8%, 3 60.9%
 FLAG_ESCAPE_GAIN = 0
+# ---- 10/1 10:00·17:00 리더보드 48판 분석 스위치 (성혁, 모두 기본 끔 = 예전 동작) ----
+# 막판 광장: 점수·점령-턴으로 끝난 26판에서 160턴 광장이 상대 것이면 12판 모두 졌고, 우리 것이면 8판 모두 이겼다. 40턴 광장
+# 소유는 승패와 무관(상대 소유 18승 14패)이라 SH_PLAZA_SKIP(초반 미루기)는 두고, PLAZA_LATE_TURN턴부터 광장 가치에
+# PLAZA_LATE_BONUS를 더한다(0 = 끔). 점령(깃발병)·지키기·몰아내기(전투병)가 모두 이 가치를 쓴다
+# 0a15a9e(FLAG_ESCAPE 켬) 위 직접 대결, 대 ee4ea4b: 시드 71000번대 200판 기준 72.2 → 130턴·+8 72.5 · 120턴·+4 73.5%,
+# 72000번대 300판 64.5 → 68.5 · 67.0% (합 500판 67.6 → 70.1 · 69.6%). strong_wide 81.8 → 86.0, econ_raid 88.0 → 89.2%.
+# 광장 미루기를 20턴으로 줄이면 대 ee4ea4b 66.5%로 나빠짐 → 130턴 · +8을 켬
+PLAZA_LATE_TURN = 130
+PLAZA_LATE_BONUS = 8.0
+# 학생회관 조기 경보: 진 22판은 1~80턴 우리 학생회관 0.76개 대 상대 1.02개(이긴 판 1.05 : 0.78). 공학관 조기 경보(ENG_WATCH)와
+# 같은 방식으로 HALL_WATCH_UNTIL턴까지 우리 학생회관 HALL_WATCH_REACH걸음 안에 적 전투병이 오면 몰아내기 과제를 낸다(0 = 끔).
+# 공학관이 먼저이도록 과제 가치는 × HALL_WATCH_WEIGHT(< 1). 대 ee4ea4b 200판 72.2 → 4걸음·0.7 69.5, 5걸음·1 67.0% → 끈 채 남김
+HALL_WATCH_REACH = 0
+HALL_WATCH_UNTIL = 80
+HALL_WATCH_WEIGHT = 1.0
+# 조건부 공학관 급습: 이긴 26판은 상대가 공학관 없이 보낸 턴이 35%(진 판 10%). 우리 전투병이 적 + RAID_ENG_SURPLUS명 이상일
+# 때만 급습 과제 중 상대 공학관 가치를 × RAID_ENG_BOOST (1 = 끔). 수비를 비우지 않게 앞설 때만 켠다.
+# 200판: ×2·5명 대 ee4ea4b 67.2 / strong_wide 85.5%, ×3·15명 68.8 / 87.0% (기준 72.2 / 81.8) — 엇갈려 끈 채 남김
+RAID_ENG_BOOST = 1.0
+RAID_ENG_SURPLUS = 0
 # 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
 # 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
 MOBILE = 1
@@ -1296,6 +1316,11 @@ def evict_tasks(t: Turn) -> list[Task]:
         if watch and b.kind == "ENG":
             radius = max(radius, ENG_WATCH_REACH)
             need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ENG_WATCH_REACH) + 1)
+        if b.kind == "HALL" and HALL_WATCH_REACH > 0 and t.world.turn <= HALL_WATCH_UNTIL:
+            if not any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
+                weight *= HALL_WATCH_WEIGHT  # 조기 경보로만 켜진 과제는 공학관보다 낮게
+            radius = max(radius, HALL_WATCH_REACH)
+            need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= HALL_WATCH_REACH) + 1)
         if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
             tasks.append(Task("몰아내기", "W", b.pos, need, t.values[b.id] * weight))
         elif econ:
@@ -1735,7 +1760,9 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     their_stations = len(world.owned(world.enemy, "STATION"))
     station_raid = their_stations == 2 if STATION_RAID == 2 else (STATION_RAID and their_stations >= 2)
     kinds = RAID_KINDS | ({"STATION"} if station_raid else set())
-    return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight)
+    boost = (RAID_ENG_BOOST if RAID_ENG_BOOST != 1.0 and sum(n for _, n in world.units_of(world.me, "W"))
+             >= sum(n for _, n in t.enemy_warriors) + RAID_ENG_SURPLUS else 1.0)
+    return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight * (boost if b.kind == "ENG" else 1.0))
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in kinds]
 
 
@@ -1987,6 +2014,8 @@ def building_value(world: World, b: Building) -> float:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
     if b.kind == "STATION" and STATION_DENY > 0:
         bonus += station_deny(world, b)
+    if b.kind == "PLAZA" and PLAZA_LATE_TURN and world.turn >= PLAZA_LATE_TURN:
+        bonus += PLAZA_LATE_BONUS
     return score + bonus
 
 

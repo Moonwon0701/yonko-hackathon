@@ -478,6 +478,22 @@ FLAG_ESCAPE = 1
 # 목표 쪽 칸보다 열세가 이만큼 이상 작은 칸이 있을 때만 피한다(0 = 조금이라도 작으면 피함). 시드 65000번대 400판: 0 · 1(열세가 정수라
 # 0과 같음) 대 ee4ea4b 68.6%, 2 64.8%, 3 60.9%
 FLAG_ESCAPE_GAIN = 0
+# ---- tAIger 분석 스위치 (10/1 10:00 · 17:00 회차 tAIger전 리플레이, docs/benchmarks.md "tAIger 분석") ----
+# tAIger는 자기 건물마다 체비쇼프 거리 2 안에서 아군 전투병 ≥ 적 전투병을 유지하고(턴 비율 0.91~1.00, 우리 0.70~0.82), 우리 건물은
+# 그 반경 안에서 우세일 때만 중립화했다. 우리는 중앙 건물을 먼저 가져갔다가 되뺏기기를 반복해(17:00 회차 방송국 9번·보급소 6번·역 4번)
+# 점령 비용과 깃발병을 흘렸다.
+# 국지 열세 할인: 목표 건물 둘레 LOCAL_RADIUS(체비쇼프) 안의 적 전투병이 우리 전투병보다 많으면 점령 가치 × LOCAL_DISCOUNT
+# (전투병이 깃발을 뽑아 주거나 호위가 그 칸에 가는 건물은 제외). DANGER_DISCOUNT(적이 닿기만 하면 ×0.5)와 곱한다. 0 = 끔
+LOCAL_DISCOUNT = 0.0
+LOCAL_RADIUS = 2
+# 깃발병 급증: tAIger는 깃발병 3~4명으로 버티다 전투병이 2배 넘게 앞서면(100·130턴) 깃발병을 20명 넘게 뽑아 모든 건물을 쓸었다.
+# FLAG_SURGE_FROM턴부터 우리 전투병 ≥ 적 전투병 × FLAG_SURGE_RATIO + FLAG_SURGE_MARGIN이면 깃발병 총원 상한을 FLAG_SURGE_FLAGS로
+# (목표 건물 수만큼 동시에 보낸다). 0 = 끔
+FLAG_SURGE = 0
+FLAG_SURGE_FROM = 60
+FLAG_SURGE_RATIO = 2.0
+FLAG_SURGE_MARGIN = 10
+FLAG_SURGE_FLAGS = 12
 # 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
 # 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
 MOBILE = 1
@@ -760,8 +776,12 @@ def produce(t: Turn) -> None:
     fc = UNIT_COST["F"]
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
-    want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    enemy_w = sum(n for _, n in t.enemy_warriors)
+    want_w = max(MIN_WARRIORS, enemy_w + t.extra_warriors)
+    max_f = MAX_FLAGS
+    if (FLAG_SURGE and world.turn >= FLAG_SURGE_FROM and nw >= enemy_w * FLAG_SURGE_RATIO + FLAG_SURGE_MARGIN):
+        max_f = max(MAX_FLAGS, FLAG_SURGE_FLAGS)  # 깃발병 급증: 전투병이 크게 앞서면 목표 건물 수만큼 한꺼번에
+    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, max_f) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -1084,6 +1104,11 @@ def select_phase(active: dict[str, bool], current: str, calm: int) -> tuple[str,
 # ------------------------------------------------------------------ 과제 만들기 (국면 가지가 켠다)
 
 
+def nearby(units: list[tuple[Pos, int]], pos: Pos, radius: int) -> int:
+    """칸 pos에서 체비쇼프 거리 radius 안에 있는 인원 수."""
+    return sum(n for (x, y), n in units if max(abs(x - pos[0]), abs(y - pos[1])) <= radius)
+
+
 def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     """점령: 목표 건물마다 깃발병 한 명. 상대 소유 건물은 가치 × steal(빼앗으면 상대 점수도 준다), 적 전투병이
     닿는 건물은 × danger(작을수록 조심한다. 전투병이 깃발을 뽑아 줄 건물은 빼고).
@@ -1091,15 +1116,19 @@ def capture_tasks(t: Turn, steal: float, danger: float) -> list[Task]:
     """
     tasks = []
     arrival = getattr(t, "arrival", {})  # 전투병이 가는 칸 (깃발병 2차에서만 있다)
+    my_w = t.world.units_of(t.world.me, "W") if LOCAL_DISCOUNT > 0 else []
     for b in t.targets:
         if b.kind == "PLAZA" and t.world.turn < SH_PLAZA_SKIP:
             continue
         pulled = b.id in t.pulled
         covered = pulled or b.pos in arrival
         stages = 1 if pulled or b.owner is None else 2
+        outnumbered = (LOCAL_DISCOUNT > 0 and not covered
+                       and nearby(t.enemy_warriors, b.pos, LOCAL_RADIUS) > nearby(my_w, b.pos, LOCAL_RADIUS))
         value = (t.values[b.id]
                  * (DIVERSION_CAPTURE if t.diversion_ok and t.diversion is b else 1.0)
                  * (danger if t.threat.get(b.pos, 0) and not covered else 1.0)
+                 * (LOCAL_DISCOUNT if outnumbered else 1.0)
                  * (steal if b.owner is not None else 1.0)
                  * (RAID_STEAL if b.owner == t.world.enemy and b.kind in RAID_KINDS else 1.0)
                  * (RUSH_CAPTURE if b.kind == "ENG" and t.world.turn <= RUSH_UNTIL else 1.0)

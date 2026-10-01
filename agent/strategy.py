@@ -479,6 +479,35 @@ FLAG_ESCAPE = 1
 # 목표 쪽 칸보다 열세가 이만큼 이상 작은 칸이 있을 때만 피한다(0 = 조금이라도 작으면 피함). 시드 65000번대 400판: 0 · 1(열세가 정수라
 # 0과 같음) 대 ee4ea4b 68.6%, 2 64.8%, 3 60.9%
 FLAG_ESCAPE_GAIN = 0
+# ---- 10/1 10:00·17:00 리더보드 48판 분석 스위치 (성혁, 모두 기본 끔 = 예전 동작) ----
+# 막판 광장: 점수·점령-턴으로 끝난 26판에서 160턴 광장이 상대 것이면 12판 모두 졌고, 우리 것이면 8판 모두 이겼다. 40턴 광장
+# 소유는 승패와 무관(상대 소유 18승 14패)이라 SH_PLAZA_SKIP(초반 미루기)는 두고, PLAZA_LATE_TURN턴부터 광장 가치에
+# PLAZA_LATE_BONUS를 더한다(0 = 끔). 점령(깃발병)·지키기·몰아내기(전투병)가 모두 이 가치를 쓴다
+# 0a15a9e(FLAG_ESCAPE 켬) 위 직접 대결, 대 ee4ea4b: 시드 71000번대 200판 기준 72.2 → 130턴·+8 72.5 · 120턴·+4 73.5%,
+# 72000번대 300판 64.5 → 68.5 · 67.0% (합 500판 67.6 → 70.1 · 69.6%). strong_wide 81.8 → 86.0, econ_raid 88.0 → 89.2%.
+# 광장 미루기를 20턴으로 줄이면 대 ee4ea4b 66.5%로 나빠짐 → 130턴 · +8을 켬
+PLAZA_LATE_TURN = 130
+PLAZA_LATE_BONUS = 8.0
+# 학생회관 조기 경보: 진 22판은 1~80턴 우리 학생회관 0.76개 대 상대 1.02개(이긴 판 1.05 : 0.78). 공학관 조기 경보(ENG_WATCH)와
+# 같은 방식으로 HALL_WATCH_UNTIL턴까지 우리 학생회관 HALL_WATCH_REACH걸음 안에 적 전투병이 오면 몰아내기 과제를 낸다(0 = 끔).
+# 공학관이 먼저이도록 과제 가치는 × HALL_WATCH_WEIGHT(< 1). 대 ee4ea4b 200판 72.2 → 4걸음·0.7 69.5, 5걸음·1 67.0% → 끈 채 남김
+HALL_WATCH_REACH = 0
+HALL_WATCH_UNTIL = 80
+HALL_WATCH_WEIGHT = 1.0
+# 조건부 공학관 급습: 이긴 26판은 상대가 공학관 없이 보낸 턴이 35%(진 판 10%). 우리 전투병이 적 + RAID_ENG_SURPLUS명 이상일
+# 때만 급습 과제 중 상대 공학관 가치를 × RAID_ENG_BOOST (1 = 끔). 수비를 비우지 않게 앞설 때만 켠다.
+# 200판: ×2·5명 대 ee4ea4b 67.2 / strong_wide 85.5%, ×3·15명 68.8 / 87.0% (기준 72.2 / 81.8) — 엇갈림.
+# 막판 광장을 켠 봇 위 시드 80000번대 500판(몰수 판 제외 짝 비교 426판): ×3·15명 대 ee4ea4b +0.7%p ±2.4(69.6 → 69.7%) — 손해가
+# 없고 strong_wide 상대 +5%p였으므로 켬(10/1 21:45 성혁 결정)
+RAID_ENG_BOOST = 3.0
+RAID_ENG_SURPLUS = 15
+# 막판 저격: 점수로 끝난 경기에서 140 → 160턴 점수차가 ±10 넘게 바뀐 판이 많고, 진 판 120턴 깃발병 3.2명 대 상대 4.8명.
+# 마지막 SNIPE_TURNS턴은 국면은 그대로(전투병 운용 유지) 두고 깃발병 과제만 "막판 점령"(160턴 전에 끝낼 수 있는 짝만,
+# 상대 건물은 중립화 한 단계 × 점수 2)으로 바꾼다(0 = 끔). ENDGAME_TURNS가 나빴던 원인(전투병이 우리 건물 전체로 흩어짐)을
+# 피하려고 전투병은 건드리지 않는다. 깃발병 상한은 160 − SNIPE_TURNS − SNIPE_LEAD턴부터 160 − 3턴까지 + SNIPE_FLAGS
+SNIPE_TURNS = 0
+SNIPE_FLAGS = 0
+SNIPE_LEAD = 10
 # 기동대: 우리 진영 깊은 곳(상대 본진까지 걸음 ≥ MOBILE_ENEMY_DIST) 건물을 MOBILE_WINDOW턴 안에 MOBILE_FLIPS번 이상 잃으면 그 건물에
 # 전담 전투병 MOBILE_SIZE명(가치 × MOBILE_WEIGHT), 마지막으로 잃은 뒤 MOBILE_CALM턴 조용하면 푼다 (0 = 끔)
 MOBILE = 1
@@ -762,7 +791,9 @@ def produce(t: Turn) -> None:
     nf = sum(n for _, n in t.flags)
     nw = sum(n for _, n in world.units_of(me, "W"))
     want_w = max(MIN_WARRIORS, sum(n for _, n in t.enemy_warriors) + t.extra_warriors)
-    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, MAX_FLAGS) - nf)
+    cap_f = MAX_FLAGS + (SNIPE_FLAGS if SNIPE_TURNS and TOTAL_TURNS - SNIPE_TURNS - SNIPE_LEAD <= world.turn
+                         <= TOTAL_TURNS - 3 else 0)
+    want_f = 0 if world.turn >= FLAG_STOP_TURN else max(0, min(len(t.f_tasks) + SPARE_FLAGS, cap_f) - nf)
     # 깃발병 최소 인원은 전투병보다 먼저 채운다. 전투병을 "적 + 추가 인원"까지 먼저 채우면, 상대가 전투병을
     # 더 뽑는 경기에서는 자원이 전부 전투병으로 가서 깃발병을 다시 만들지 못했다(9/27 리더보드 패배 경기:
     # 깃발병 0명인 22턴 중 21턴을 전투병만 생산, 건물 6 → 15개를 내줌)
@@ -1312,6 +1343,11 @@ def evict_tasks(t: Turn) -> list[Task]:
         if watch and b.kind == "ENG":
             radius = max(radius, ENG_WATCH_REACH)
             need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= ENG_WATCH_REACH) + 1)
+        if b.kind == "HALL" and HALL_WATCH_REACH > 0 and t.world.turn <= HALL_WATCH_UNTIL:
+            if not any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
+                weight *= HALL_WATCH_WEIGHT  # 조기 경보로만 켜진 과제는 공학관보다 낮게
+            radius = max(radius, HALL_WATCH_REACH)
+            need = max(need, sum(n for p, n in t.enemy_warriors if dist.get(p, 99) <= HALL_WATCH_REACH) + 1)
         if any(dist.get(p, 99) <= radius for p, _ in t.enemy_warriors):
             tasks.append(Task("몰아내기", "W", b.pos, need, t.values[b.id] * weight))
         elif econ:
@@ -1760,7 +1796,9 @@ def raid_tasks(t: Turn, weight: float) -> list[Task]:
     their_stations = len(world.owned(world.enemy, "STATION"))
     station_raid = their_stations == 2 if STATION_RAID == 2 else (STATION_RAID and their_stations >= 2)
     kinds = RAID_KINDS | ({"STATION"} if station_raid else set())
-    return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight)
+    boost = (RAID_ENG_BOOST if RAID_ENG_BOOST != 1.0 and sum(n for _, n in world.units_of(world.me, "W"))
+             >= sum(n for _, n in t.enemy_warriors) + RAID_ENG_SURPLUS else 1.0)
+    return [Task("급습", "W", b.pos, attack_need(t, b, 1), t.values[b.id] * weight * (boost if b.kind == "ENG" else 1.0))
             for b in sorted(world.owned(world.enemy), key=lambda b: t.key(b.pos)) if b.kind in kinds]
 
 
@@ -2035,6 +2073,8 @@ def building_value(world: World, b: Building) -> float:
         bonus = FUNCTION_VALUE.get(b.kind, 0.0)
     if b.kind == "STATION" and STATION_DENY > 0:
         bonus += station_deny(world, b)
+    if b.kind == "PLAZA" and PLAZA_LATE_TURN and world.turn >= PLAZA_LATE_TURN:
+        bonus += PLAZA_LATE_BONUS
     return score + bonus
 
 
@@ -2222,6 +2262,15 @@ def final_capture(danger: float) -> Node:
     return Act(f"막판 점령 과제: 160턴 전에 끝낼 수 있는 건물만, 최종 점수로 (적 전투병이 닿는 건물 ×{danger:g})", on)
 
 
+def final_snipe(t: Turn) -> None:
+    """막판 저격(SNIPE_TURNS > 0): 마지막 SNIPE_TURNS턴은 국면이 고른 깃발병 과제를 막판 점령 + 깃발병 지키기로 바꾼다.
+    전투병 과제는 국면 그대로."""
+    if not SNIPE_TURNS or t.world.turn <= TOTAL_TURNS - SNIPE_TURNS or t.deadline is not None:
+        return
+    t.deadline = TOTAL_TURNS - t.world.turn
+    t.makers["F"] = [lambda t: final_capture_tasks(t, THREAT_DANGER), flag_guard_tasks]
+
+
 def final_guard() -> Node:
     return enable(f"막판 수비 과제: 남은 턴 안에 적 깃발병이 닿는 우리 건물 (점수 ×{FINAL_GUARD_WEIGHT:g})", "W", final_guard_tasks)
 
@@ -2289,6 +2338,7 @@ TURN_TREE = Sequence(
     "한 턴",
     Act("상황 읽기 (위협 맵·건물 가치·국면 조건)", read_situation),
     PHASE_TREE,
+    Act("막판 저격 (SNIPE_TURNS > 0): 마지막 턴 깃발병만 최종 점수 기준으로", final_snipe),
     Sequence(
         "깃발병 1차: 이번 턴 점령할 건물",
         Act("지금 있는 깃발병을 점령 과제에 배정", plan_flags),

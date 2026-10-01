@@ -160,6 +160,11 @@ def section(secs: dict[str, list[str]], prefix: str) -> list[tuple[str, object]]
     raise KeyError(prefix)
 
 
+def labeled(*pairs: tuple[str, str]) -> list[str]:
+    """표 칸 안의 "**이름** 내용" 문단들. 내용이 비었거나 "–"이면 뺀다."""
+    return [f"**{name}** {text}" for name, text in pairs if text.strip(" –-")]
+
+
 def body_xml(bl: list[tuple[str, object]]) -> str:
     return "".join(para(v) if k == "p" else bullet(v) for k, v in bl if k != "table")
 
@@ -201,7 +206,10 @@ def build(out_path: Path) -> None:
     t = top_elements(body)
     # 양식 순서: 0 제목, 1 표지 표, 2 안내, 3 전략 요약, 4 안내, 6 유닛 운용, 7 안내, 8 표, 10 구역별, 11 안내,
     # 13 개발 과정, 14 안내, 15 표, 18 소감, 24 쪽 나눔, 25 부록 제목, 26 부록 안내, 30 부록 표, 32 sectPr
-    title, h_sum, h_unit, h_zone, h_dev, h_feel = t[0], t[3], t[6], t[10], t[13], t[18]
+    title = t[0]
+    # 절 제목이 쪽 끝에 홀로 남지 않게 다음 문단과 붙인다
+    h_sum, h_unit, h_zone, h_dev, h_feel = (t[i].replace('<w:pStyle w:val="a6"/>', '<w:pStyle w:val="a6"/><w:keepNext/>', 1)
+                                            for i in (3, 6, 10, 13, 18))
     page_break, h_app, app_note, sect = t[24], t[25], t[26], t[32]
 
     parts: list[str] = [title]
@@ -224,7 +232,7 @@ def build(out_path: Path) -> None:
     parts += [h_unit, body_xml(paras[:1])]
     rows = []
     for r in tbl[1:]:
-        rows.append([[r[0]], [f"**역할** {r[1]}", f"**생산 우선순위·비율** {r[2]}", f"**투입 시점** {r[3].lstrip('– ')}"]])
+        rows.append([[r[0]], labeled(("역할", r[1]), ("생산 우선순위·비율", r[2]), ("투입 시점", r[3]))])
     parts.append(table([1600, 7376], rows, label_col=True))
     parts.append(body_xml(paras[1:]))
 
@@ -233,7 +241,7 @@ def build(out_path: Path) -> None:
     tbl = next(v for k, v in bl if k == "table")
     paras = [(k, v) for k, v in bl if k != "table"]
     parts += [h_zone, body_xml(paras[:1])]
-    rows = [[[r[0]], [f"**점령** {r[1]}", f"**방어** {r[2]}", f"**공격** {r[3]}"]] for r in tbl[1:]]
+    rows = [[[r[0]], labeled(("점령", r[1]), ("방어", r[2]), ("공격", r[3]))] for r in tbl[1:]]
     parts.append(table([1600, 7376], rows, label_col=True))
     parts.append(body_xml(paras[1:]))
 
@@ -247,7 +255,7 @@ def build(out_path: Path) -> None:
     for r in sub_tbl[1:]:
         parts.append(table([1600, 7376], [[[lab], [val]] for lab, val in zip(labels, r)], label_col=True))
     parts.append(body_xml(bl[idx[0] + 1:idx[1]]))
-    parts.append(table([800, 2900, 1400, 3876], [[[c] for c in row] for row in abl_tbl], header="F2F2F2"))
+    parts.append(table([800, 3000, 1600, 3576], [[[c] for c in row] for row in abl_tbl], header="F2F2F2"))
     parts.append(body_xml(bl[idx[1] + 1:]))
 
     # 5. 소감

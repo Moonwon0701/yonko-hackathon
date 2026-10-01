@@ -305,6 +305,14 @@ _flag_goal: dict[Pos, set[Pos]] = {}  # 지난 턴 이동 뒤 칸 → 그 칸 �
 # 쪽으로" 가지에서, 10명은 위험한 칸에 머물다, 11명은 안전하다고 본 칸에서 죽었다(적 병원 생산 8 · 적 역 순간이동 3).
 # 두 걸음 앞 보기: 목표 쪽으로 나아갈 칸은 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병일 때만 (0 = 끔)
 FLAG_LOOKAHEAD = 0
+# 포위 탈출(현진 테마 브랜치): 사방이 위험해 "위험해도 목표 쪽으로" 가던 깃발병(사망의 75%)이, 대신 제자리·이웃 중 (적 위협 − 우리
+# 전투병)이 가장 작은 칸으로 간다(0 = 끔). 평소 이동은 그대로라 점령 속도를 늦추지 않는다
+# 구조 요청: 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "그 칸 위협 + 1"명 과제(가치 RESCUE_VALUE × 인원, 0 = 끔)
+# 둘 다 켬 — daa1888(c711702) 상대 63% (56–69%) / 60% (53–67%) (시드 200~299 / 300~399), 서버 맵 51.8%, 학습 봇 26fa986 상대
+# 41% (daa1888 39%), 흉내 봇 풀 평균 90 → 95%, 우리 깃발병 사망 0.83 → 0.63명(10~30턴). 하나씩: 탈출만 53.5%·풀 90%,
+# 구조 1만 57 / 63%·서버 맵 48.2%·학습 봇 33%, 구조 3은 35% (docs/benchmarks.md)
+FLAG_ESCAPE = 1
+RESCUE_VALUE = 1.0
 # 적 병원 생산: 위협 맵에 상대 병원에서 이번 턴 만들 수 있는 전투병을 더한다 (0 = 끔, 본진만)
 HOSPITAL_THREAT = 0
 # 공학관 타이밍 생산: 우리에게 공학관이 없고 곧 얻으면(eng_coming) 전투병 생산을 미뤄 값 2로 산다(0 = 끔, 1 = 이번 턴 끝, 2 = 다음
@@ -647,7 +655,8 @@ def move_flags(t: Turn) -> None:
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
-        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead)
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead,
+                         lambda p: threat.get(p, 0) - w_after[p])
         if step:
             f_steps[(pos, step)] += 1
         goals.setdefault(step or pos, set()).add(task.pos)
@@ -1064,6 +1073,14 @@ def spear_tasks(t: Turn) -> list[Task]:
     return [Task("창", "W", b.pos, t.threat.get(b.pos, 0) + SPEAR_EXTRA, SPEAR_VALUE)]
 
 
+def rescue_tasks(t: Turn) -> list[Task]:
+    """구조: 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "위협 + 1"명 (RESCUE_VALUE > 0일 때)."""
+    if RESCUE_VALUE <= 0:
+        return []
+    return [Task("구조", "W", pos, t.threat[pos] + 1, RESCUE_VALUE * n)
+            for pos, n in t.flags if t.threat.get(pos, 0)]
+
+
 def line_cell(t: Turn, eng: Pos) -> Pos | None:
     """적 본진에서 `eng`까지 최단 경로 위, `eng`에서 LINE_DEPTH걸음 떨어진 칸. 경로가 그보다 짧으면 적 본진 칸, 없으면 None."""
     dist = t.dist_to(eng)
@@ -1175,8 +1192,10 @@ class FlagMove:
     def __init__(
         self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
         safe: Callable[[Pos], bool], hold: bool, ahead: Callable[[Pos], bool] | None = None,
+        danger: Callable[[Pos], int] | None = None,
     ) -> None:
         self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
+        self.danger = danger  # 칸의 (적 위협 − 우리 전투병). FLAG_ESCAPE에 쓴다
         self.ahead = ahead or safe  # 목표 쪽으로 나아갈 칸의 판단 (기본 = 안전)
         self.here = dist.get(pos)
         neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
@@ -1195,6 +1214,16 @@ class FlagMove:
         self.step = n
         return True
 
+    def escape(self) -> bool:
+        """FLAG_ESCAPE: 제자리와 들어갈 수 있는 이웃 중 (적 위협 − 우리 전투병)이 가장 작은 칸, 같으면 목표에 가까운 칸."""
+        if not FLAG_ESCAPE or self.danger is None:
+            return False
+        cells = [self.pos] + [n for n in self.neighbors if self.enterable(n)]
+        best = min(cells, key=lambda c: (self.danger(c), self.dist.get(c, 99)))
+        if best != self.pos:
+            self.step = best
+        return True
+
 
 def flag_step(
     pos: Pos,
@@ -1204,13 +1233,15 @@ def flag_step(
     safe: Callable[[Pos], bool],
     hold: bool,
     ahead: Callable[[Pos], bool] | None = None,
+    danger: Callable[[Pos], int] | None = None,
 ) -> Pos | None:
     """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
-    피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
+    피한다 → (FLAG_ESCAPE면 가장 덜 위험한 칸으로) → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지
+    않고 앞에서 기다린다.
     """
-    m = FlagMove(pos, goal, dist, order, safe, hold, ahead)
+    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, danger)
     FLAG_TREE.tick(m)
     return m.step
 
@@ -1480,6 +1511,10 @@ def spear() -> Node:
                   "W", spear_tasks)
 
 
+def rescue() -> Node:
+    return enable("구조 과제: 적 위협이 있는 칸의 우리 깃발병에 전투병 위협 + 1명 (RESCUE_VALUE > 0일 때)", "W", rescue_tasks)
+
+
 def eng_focus() -> Node:
     def on(t: Turn) -> None:
         t.eng_focus = True
@@ -1506,35 +1541,35 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
-        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(THREAT_EXTRA),
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
     ),
     phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), spear(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), hold_line(), spear(), rescue(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(THREAT_EXTRA),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
-        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), spear(), warriors(1),
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), hold_line(), spear(), rescue(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), hold_line(), spear(), rescue(), warriors(1),
     ),
 )
 
@@ -1571,6 +1606,7 @@ FLAG_TREE = Selector(
     Sequence("대기", Condition("지금 칸이 안전", lambda m: m.safe(m.pos)), Act("제자리", lambda m: None)),
     Act("가장 목표에 가까운 안전한 이웃으로 피하기", lambda m: m.go(min(
         (n for n in m.neighbors if m.safe(n)), key=lambda n: m.dist[n], default=None))),
+    Act("가장 덜 위험한 칸으로 (FLAG_ESCAPE일 때)", lambda m: m.escape()),
     Act("위험해도 목표 쪽으로", lambda m: m.go(
         m.closer[0] if m.closer and m.enterable(m.closer[0]) else None)),
     Act("제자리", lambda m: None),

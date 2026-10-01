@@ -470,7 +470,8 @@ STATION_RAID = 0
 # 포위된 깃발병 (10/1 10:00 리더보드 분석, 기본 끔): 진 경기는 깃발병이 판당 12.9명 죽었고(이긴 경기 5.5) 그중 11.7명이 위협(1걸음 안
 # 적 전투병)이 우리 전투병보다 많은 칸으로 걸어 들어가 죽었다 — 지금 칸도 이웃도 위험할 때의 "위험해도 목표 쪽으로" 가지. 리더보드
 # 두 회차 진 15판에서 이 강행 279번 중 그 칸이 실제로 죽는 칸이었던 것이 181번(65%), 같은 순간 열세(위협 − 우리 전투병)가 가장 작은
-# 이웃이었다면 131번(47%). FLAG_ESCAPE = 1 = 포위되면 열세가 가장 작은 이웃으로(같으면 목표에 가까운 쪽), 2 = 제자리도 후보, 0 = 끔.
+# 이웃이었다면 131번(47%). FLAG_ESCAPE = 1 = 포위되면 열세가 가장 작은 이웃으로(같으면 목표에 가까운 쪽), 2 = 제자리도 후보,
+# 3 = 1과 같되 열세가 같으면 주변(1칸 안) 우리 전투병이 많은 칸으로, 0 = 끔.
 # ee4ea4b 위 직접 대결(새 시드 63000·64000번대 600판씩): 1은 대 ee4ea4b 64.4 · 68.0%, 337ab49 66.8 → 77.0 · 67.8 → 75.3%,
 # strong_wide 82.5 → 85.7 · 79.2 → 85.7%, 현진 7b8b67e 91.8 → 94.5% — 쓴 상대 모두 +. 2는 대 ee4ea4b 54.1%. 로컬 80판에서 우리
 # 깃발병 생산 9.8 → 8.8명, 상대 9.8 → 11.2명 (docs/benchmarks.md "진 경기 분석 스위치")
@@ -942,6 +943,10 @@ def move_flags(t: Turn) -> None:
         """이 칸의 열세: 다음 턴 올 수 있는 적 전투병 − 이동 뒤 우리 전투병 (FLAG_ESCAPE)."""
         return threat.get(pos, 0) - w_after[pos]
 
+    def support(pos: Pos) -> int:
+        """이 칸과 이웃의 이동 뒤 우리 전투병 (FLAG_ESCAPE = 3의 동점 가르기)."""
+        return w_after[pos] + sum(w_after[(pos[0] + dx, pos[1] + dy)] for dx, dy in t.order)
+
     def ahead(pos: Pos) -> bool:
         """나아갈 칸: 안전하고, FLAG_LOOKAHEAD면 두 걸음 안 적 전투병 ≤ 그 칸과 이웃의 우리 전투병(다음 턴 포위 대비)."""
         if not safe(pos):
@@ -958,7 +963,7 @@ def move_flags(t: Turn) -> None:
     for pos, task in t.plan:
         # 전투병이 이번 턴에 못 오면 한 칸 앞에서 대기
         hold = task.building.id in t.pulled and t.arrival[task.pos] > 1
-        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead, margin)
+        step = flag_step(pos, task.pos, t.dist_to(task.pos), t.order, safe, hold, ahead, margin, support)
         if step:
             f_steps[(pos, step)] += 1
         goals.setdefault(step or pos, set()).add(task.pos)
@@ -1804,10 +1809,12 @@ class FlagMove:
         self, pos: Pos, goal: Pos, dist: dict[Pos, int], order: tuple[Pos, ...],
         safe: Callable[[Pos], bool], hold: bool, ahead: Callable[[Pos], bool] | None = None,
         margin: Callable[[Pos], int] | None = None,
+        support: Callable[[Pos], int] | None = None,
     ) -> None:
         self.pos, self.goal, self.dist, self.safe, self.hold = pos, goal, dist, safe, hold
         self.ahead = ahead or safe  # 목표 쪽으로 나아갈 칸의 판단 (기본 = 안전)
         self.margin = margin  # 칸의 열세 (FLAG_ESCAPE)
+        self.support = support  # 칸 주변 우리 전투병 (FLAG_ESCAPE = 3)
         self.here = dist.get(pos)
         neighbors = [(pos[0] + dx, pos[1] + dy) for dx, dy in order]
         self.neighbors = [n for n in neighbors if n in dist]
@@ -1832,7 +1839,10 @@ class FlagMove:
         cands = [n for n in self.neighbors if self.enterable(n)] + ([self.pos] if FLAG_ESCAPE == 2 else [])
         if not cands:
             return False
-        best = min(cands, key=lambda n: (self.margin(n), self.dist[n]))
+        if FLAG_ESCAPE == 3 and self.support is not None:  # 열세가 같으면 우리 전투병 곁으로
+            best = min(cands, key=lambda n: (self.margin(n), -self.support(n), self.dist[n]))
+        else:
+            best = min(cands, key=lambda n: (self.margin(n), self.dist[n]))
         forward = next((n for n in self.closer if self.enterable(n)), None)
         if forward is not None and self.margin(forward) - self.margin(best) < FLAG_ESCAPE_GAIN:
             best = forward  # 목표 쪽 칸보다 열세가 FLAG_ESCAPE_GAIN 이상 줄지 않으면 그대로 나아간다
@@ -1849,13 +1859,14 @@ def flag_step(
     hold: bool,
     ahead: Callable[[Pos], bool] | None = None,
     margin: Callable[[Pos], int] | None = None,
+    support: Callable[[Pos], int] | None = None,
 ) -> Pos | None:
     """깃발병 한 명의 다음 칸 (None = 제자리). 판단은 FLAG_TREE:
 
     목표 쪽으로 한 칸 줄이는 칸 중 안전한 곳 → 없으면 지금 칸이 안전할 때 대기 → 아니면 안전한 이웃으로
     피한다 → 그것도 없으면 그냥 목표 쪽으로 간다. `hold`면 목표 칸에 들어가지 않고 앞에서 기다린다.
     """
-    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, margin)
+    m = FlagMove(pos, goal, dist, order, safe, hold, ahead, margin, support)
     FLAG_TREE.tick(m)
     return m.step
 

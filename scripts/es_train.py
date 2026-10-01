@@ -103,6 +103,15 @@ POOLS = {
         "sunghyuk": ("git:73e2691", 1),
         "eng_rush": ("opponents/eng_rush.py", 1),
     },
+    "final": {  # experiments/learned_final(= main e5cbeb7: 0a15a9e + 성혁 막판 광장·공학관 급습) 위에서 이어 학습.
+        # 주 상대 = 최종 후보 자신, 그다음 제출본 ee4ea4b와 strong_wide. 나머지는 퇴보 방지용
+        "e5cbeb7": ("git:e5cbeb7", 4),
+        "ee4ea4b": ("git:ee4ea4b", 3),
+        "strong_wide": ("opponents/strong_wide.py", 3),
+        "0a15a9e": ("git:0a15a9e", 1),
+        "337ab49": ("git:337ab49", 1),
+        "eng_rush": ("opponents/eng_rush.py", 1),
+    },
 }
 POOL = POOLS["hyunjin"]
 MARGIN_W = 0.5

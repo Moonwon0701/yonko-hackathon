@@ -213,6 +213,9 @@ RETAKE_CAPTURE = 2.0
 # 탈환 대상 종류 (10/1 오후). 진 경기는 중앙(광장·방송국·보급소·서울역)을 내줘서 졌는데 탈환은 공학관만 본다. 중앙을 넣으면 잃은 중앙
 # 건물에도 전투병이 되돌아간다. 기본 = 공학관만(예전 동작)
 RETAKE_KINDS = {"ENG"}
+# 구조 요청 (hyunjin/defense-econ e49947f에서 옮김, 기본 끔): 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "그 칸 위협 + 1"명
+# 과제(가치 RESCUE_VALUE × 깃발병 수). 현진 측정(현진 봇 위, 포위 탈출과 함께): daa1888 상대 63 · 60%, 구조만 1.0 57 · 63%
+RESCUE_VALUE = 0.0
 # 공학관 열세 국면: 우리 전투병 값 > 상대 값이면 ENG_DEFICIT 가지. 전투병은 1:1 상쇄라 이때 흩어진 교전은 1.5배 손해이므로
 # 초소·전선·급습(학생회관)·러시를 빼고, 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명(가치 DEFICIT_VALUE),
 # 공학관 점령 가치 × DEFICIT_CAPTURE. 공학관 할인은 중복되지 않으므로(최소 2) 어느 쪽 공학관이든 하나면 된다.
@@ -1687,6 +1690,14 @@ def retake_tasks(t: Turn) -> list[Task]:
             for b in t.others if recently_lost(t, b)]
 
 
+def rescue_tasks(t: Turn) -> list[Task]:
+    """구조(현진): 적 위협이 있는 칸에 선 우리 깃발병마다 전투병 "위협 + 1"명 (RESCUE_VALUE > 0일 때)."""
+    if RESCUE_VALUE <= 0:
+        return []
+    return [Task("구조", "W", pos, t.threat[pos] + 1, RESCUE_VALUE * n)
+            for pos, n in t.flags if t.threat.get(pos, 0)]
+
+
 def eng_focus_tasks(t: Turn) -> list[Task]:
     """공학관 집중(열세 국면): 우리 것이 아닌 공학관 전부에 전투병 "위협 + DEFICIT_EXTRA"명. 어느 쪽이든 하나를 먹으면 된다
     — 배정은 가치 / (1 + 가장 먼 전투병 거리)라 적이 덜 지키고 가까운 쪽이 먼저 찬다."""
@@ -2160,6 +2171,10 @@ def retake() -> Node:
     return enable(f"탈환 과제: {RETAKE_MEMORY}턴 안에 잃은 우리 공학관 (RETAKE_VALUE > 0일 때)", "W", retake_tasks)
 
 
+def rescue() -> Node:
+    return enable("구조 과제: 적 위협이 있는 칸의 우리 깃발병에 전투병 위협 + 1명 (RESCUE_VALUE > 0일 때)", "W", rescue_tasks)
+
+
 def eng_focus() -> Node:
     def on(t: Turn) -> None:
         t.eng_focus = True
@@ -2201,39 +2216,39 @@ PHASE_TREE = Selector(
     "국면 선택 → 이번 턴 과제 구성 (위에서부터 처음 성립하는 가지)",
     phase_branch(
         "SWEEP", "우리 점수가 과반이고 상대 건물이 SWEEP_ENEMY_MAX곳 이하 (SWEEP일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), sweep(), retake(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), sweep(), retake(), rescue(), warriors(1),
     ),
     phase_branch(
         "ENDGAME", "마지막 ENDGAME_TURNS턴 (ENDGAME_TURNS > 0일 때)",
-        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), warriors(THREAT_EXTRA),
+        final_capture(danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), final_guard(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), rescue(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "COMEBACK", "COMEBACK_TURN턴 뒤 추정 점수가 뒤짐 (COMEBACK_TURN > 0일 때)",
-        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), warriors(1),
+        capture(steal=2.0, danger=0.8), kill(), escort(), guard(1.0), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), rescue(), warriors(1),
     ),
     phase_branch(
         "BEHIND", "적 전투병 ≥ 우리 전투병 + BEHIND_MARGIN (BEHIND_MARGIN > 0일 때)",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(2.0), evict(), squad(), retake(), rescue(), warriors(2),
     ),
     phase_branch(
         "THREAT", f"적 깃발병이 {GUARD_RADIUS}칸 안에 온 우리 건물의 추정 점수 합 ≥ {THREAT_PRESSURE:g}",
-        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(THREAT_EXTRA),
+        capture(steal=1.0, danger=THREAT_DANGER), kill(), escort(), guard(THREAT_GUARD), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), rescue(), diversion(), mobile(), warriors(THREAT_EXTRA),
     ),
     phase_branch(
         "DEFICIT", "우리 전투병 값 > 상대 전투병 값 (공학관 열세, ENG_DEFICIT일 때)",
-        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), warriors(1),
+        capture(steal=1.5, danger=0.5), eng_focus(), kill(), escort(), guard(1.0), evict(), squad(), retake(), rescue(), warriors(1),
     ),
     phase_branch(
         "HOLD", f"{LATE_TURN}턴 이후이고 추정 점수가 앞섬",
-        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(2),
+        capture(steal=1.0, danger=0.3), kill(), escort(), guard(1.5), evict(), frontline(1.5), raid(1.0), squad(), rush(), picket(), retake(), rescue(), diversion(), mobile(), warriors(2),
     ),
     phase_branch(
         "ATTACK", f"우리 전투병 ≥ 적 전투병 + {ATTACK_MARGIN}이고 상대가 건물을 가짐",
-        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(1),
+        capture(steal=1.5, danger=0.5), kill(), escort(), guard(0.5), evict(), frontline(0.5), raid(2.0), squad(), rush(), picket(), retake(), rescue(), diversion(), mobile(), warriors(1),
     ),
     phase_branch(
         "EXPAND", None,
-        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), diversion(), mobile(), warriors(1),
+        capture(steal=1.0, danger=DANGER_DISCOUNT), kill(), escort(), guard(1.0), evict(), frontline(1.0), raid(1.0), squad(), rush(), picket(), retake(), rescue(), diversion(), mobile(), warriors(1),
     ),
 )
 
